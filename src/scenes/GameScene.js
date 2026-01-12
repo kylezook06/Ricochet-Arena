@@ -130,6 +130,14 @@ class GameScene extends Phaser.Scene {
       "W/S move • A/D turn • SPACE fire (ricochets!) • R restart",
       { fontFamily: "Arial", fontSize: "14px", color: "#cfcfcf" }
     ).setAlpha(0.85);
+
+    this.input.keyboard.on("keydown-F", () => {
+      if (this.scale.isFullscreen) {
+        this.scale.stopFullscreen();
+      } else {
+        this.scale.startFullscreen();
+      }
+    });
   }
 
   update(time, delta) {
@@ -141,6 +149,10 @@ class GameScene extends Phaser.Scene {
     }
 
     if (!this.registry.get("roundActive")) return;
+
+    // Always keep tanks visible/on-top (defensive)
+    this.player.setVisible(true).setAlpha(1).setDepth(10);
+    this.ai.setVisible(true).setAlpha(1).setDepth(10);
 
     this._updatePlayer(dt, time);
     this._updateAI(dt, time);
@@ -345,18 +357,19 @@ class GameScene extends Phaser.Scene {
   }
 
   _onTankHit(which, bullet) {
-    bullet.disableBody(true, true);
+    const tank = (which === "player") ? this.player : this.ai;
 
     const now = this.time.now;
-    const tank = (which === "player") ? this.player : this.ai;
+    const invulnUntil = tank.getData("invulnUntil") || 0;
+    if (now < invulnUntil) return;
+
+    bullet.disableBody(true, true);
+
+    tank.setData("invulnUntil", now + 200);
 
     tank.setDepth(10);
     tank.setVisible(true);
     tank.setAlpha(1);
-
-    const invulnUntil = tank.getData("invulnUntil") || 0;
-    if (now < invulnUntil) return;
-    tank.setData("invulnUntil", now + 120);
 
     if (which === "player") {
       const hp = this.registry.get("playerHP") - 1;
