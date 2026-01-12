@@ -167,6 +167,7 @@ class GameScene extends Phaser.Scene {
     const g = this.add.graphics();
     g.lineStyle(4, 0x2c2c2c, 1);
     g.strokeRect(this.ARENA.x, this.ARENA.y, this.ARENA.w, this.ARENA.h);
+    g.setDepth(0);
 
     this.walls = this.physics.add.staticGroup();
     const thickness = 20;
@@ -336,6 +337,7 @@ class GameScene extends Phaser.Scene {
 
     bullet.setData("owner", owner);
     bullet.setData("bornAt", time);
+    bullet.setData("alreadyHit", false);
 
     // Ensure body settings are re-applied (pooled objects can lose state)
     bullet.body.setAllowGravity(false);
@@ -357,15 +359,13 @@ class GameScene extends Phaser.Scene {
   }
 
   _onTankHit(which, bullet) {
-    const tank = (which === "player") ? this.player : this.ai;
-
-    const now = this.time.now;
-    const invulnUntil = tank.getData("invulnUntil") || 0;
-    if (now < invulnUntil) return;
+    if (!bullet || !bullet.active) return;
+    if (bullet.getData("alreadyHit")) return;
+    bullet.setData("alreadyHit", true);
 
     bullet.disableBody(true, true);
 
-    tank.setData("invulnUntil", now + 200);
+    const tank = (which === "player") ? this.player : this.ai;
 
     tank.setDepth(10);
     tank.setVisible(true);
