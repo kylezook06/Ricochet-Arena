@@ -216,6 +216,9 @@ class GameScene extends Phaser.Scene {
 
   _spawnTank(x, y, texKey) {
     const spr = this.physics.add.image(x, y, texKey);
+    spr.setDepth(10);
+    spr.setVisible(true);
+    spr.setAlpha(1);
     spr.setMaxVelocity(this.TANK.maxSpeed, this.TANK.maxSpeed);
     spr.body.setCircle(13, (spr.width / 2) - 13, (spr.height / 2) - 13);
     spr.setData("invulnUntil", 0);
@@ -301,7 +304,7 @@ class GameScene extends Phaser.Scene {
   // Bullets / Combat
   // -----------------------------
 
-  // ✅ FIX: re-enable/reset pooled bullets after disableBody()
+  // Re-enable/reset pooled bullets after disableBody()
   _fireBullet(shooter, owner, time) {
     const dir = new Phaser.Math.Vector2(1, 0).rotate(shooter.rotation);
     const spawnOffset = 28;
@@ -347,6 +350,10 @@ class GameScene extends Phaser.Scene {
     const now = this.time.now;
     const tank = (which === "player") ? this.player : this.ai;
 
+    tank.setDepth(10);
+    tank.setVisible(true);
+    tank.setAlpha(1);
+
     const invulnUntil = tank.getData("invulnUntil") || 0;
     if (now < invulnUntil) return;
     tank.setData("invulnUntil", now + 120);
@@ -368,8 +375,12 @@ class GameScene extends Phaser.Scene {
   }
 
   _flashTank(tank) {
+    tank.setVisible(true);
     tank.setAlpha(0.35);
-    this.time.delayedCall(80, () => tank.setAlpha(1));
+    this.time.delayedCall(80, () => {
+      tank.setVisible(true);
+      tank.setAlpha(1);
+    });
   }
 
   _endRound(win, message) {
