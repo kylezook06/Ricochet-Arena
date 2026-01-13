@@ -67,9 +67,6 @@ class GameScene extends Phaser.Scene {
     // --- Arena walls
     this._createArena();
 
-    // --- Obstacles (static blocks inside arena)
-    this._createObstacles();
-
     // --- Placeholder textures
     this._createTankTextures();
 
@@ -89,9 +86,14 @@ class GameScene extends Phaser.Scene {
     // --- Bullets pool
     this.bullets = this.physics.add.group();
 
+    // --- Obstacles (static blocks inside arena)
+    this._createObstacles();
+
     // --- Collisions
     this.physics.add.collider(this.player, this.walls);
     this.physics.add.collider(this.ai, this.walls);
+    this.physics.add.collider(this.player, this.obstacles);
+    this.physics.add.collider(this.ai, this.obstacles);
 
     // Bullets bounce off walls
     this.physics.add.collider(this.bullets, this.walls, (bullet) => {
@@ -104,6 +106,19 @@ class GameScene extends Phaser.Scene {
         const s = max / sp;
         b.velocity.x *= s;
         b.velocity.y *= s;
+      }
+    });
+
+    this.physics.add.collider(this.bullets, this.obstacles, (bullet) => {
+      const body = bullet && bullet.body;
+      if (!body) return;
+
+      const sp = Math.sqrt(body.velocity.x * body.velocity.x + body.velocity.y * body.velocity.y);
+      const max = this.BULLET.speed * 1.05;
+      if (sp > max) {
+        const s = max / sp;
+        body.velocity.x *= s;
+        body.velocity.y *= s;
       }
     });
 
@@ -248,21 +263,6 @@ class GameScene extends Phaser.Scene {
       o.setVisible(false);
     });
 
-    this.physics.add.collider(this.player, this.obstacles);
-    this.physics.add.collider(this.ai, this.obstacles);
-
-    this.physics.add.collider(this.bullets, this.obstacles, (bullet) => {
-      const body = bullet && bullet.body;
-      if (!body) return;
-
-      const sp = Math.sqrt(body.velocity.x * body.velocity.x + body.velocity.y * body.velocity.y);
-      const max = this.BULLET.speed * 1.05;
-      if (sp > max) {
-        const s = max / sp;
-        body.velocity.x *= s;
-        body.velocity.y *= s;
-      }
-    });
   }
 
   _createTankTextures() {
