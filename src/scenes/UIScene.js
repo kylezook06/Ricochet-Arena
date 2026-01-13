@@ -1,0 +1,110 @@
+class UIScene extends Phaser.Scene {
+  constructor() {
+    super("UIScene");
+  }
+
+  create() {
+    this.ui = {};
+
+    this.ui.hpText = this.add.text(16, 14, "", {
+      fontFamily: "Arial",
+      fontSize: "18px",
+      color: "#eaeaea"
+    });
+
+    this.ui.timeText = this.add.text(16, 40, "", {
+      fontFamily: "Arial",
+      fontSize: "18px",
+      color: "#eaeaea"
+    });
+
+    this.ui.scoreText = this.add.text(16, 66, "", {
+      fontFamily: "Arial",
+      fontSize: "18px",
+      color: "#eaeaea"
+    });
+
+    this.ui.boostText = this.add.text(16, 92, "", {
+      fontFamily: "Arial",
+      fontSize: "18px",
+      color: "#eaeaea"
+    });
+
+    this.ui.boostBar = this.add.graphics();
+
+    this.ui.centerMsg = this.add.text(480, 270, "", {
+      fontFamily: "Arial",
+      fontSize: "34px",
+      color: "#ffffff",
+      align: "center"
+    }).setOrigin(0.5).setAlpha(0);
+
+    this.ui.subMsg = this.add.text(480, 315, "Press R to Restart", {
+      fontFamily: "Arial",
+      fontSize: "18px",
+      color: "#cfcfcf"
+    }).setOrigin(0.5).setAlpha(0);
+
+    // Update UI frequently
+    this.time.addEvent({
+      delay: 50,
+      loop: true,
+      callback: () => this._refresh()
+    });
+  }
+
+  _refresh() {
+    const pHP = this.registry.get("playerHP");
+    const aHP = this.registry.get("aiHP");
+    const t = this.registry.get("timeLeft");
+    const score = this.registry.get("score");
+
+    this.ui.hpText.setText(`HP  You: ${pHP}    AI: ${aHP}`);
+    this.ui.timeText.setText(`Time Left: ${t}s`);
+    this.ui.scoreText.setText(`Score: ${score}`);
+
+    const now = this.time.now;
+    const activeUntil = this.registry.get("boostActiveUntil") || 0;
+    const readyAt = this.registry.get("boostReadyAt") || 0;
+    const cdMs = this.registry.get("boostCooldownMs") || 1;
+
+    let label = "Boost: READY";
+    let pct = 1;
+
+    if (now < activeUntil) {
+      const left = Math.ceil((activeUntil - now) / 100) / 10;
+      label = `Boost: ACTIVE ${left.toFixed(1)}s`;
+      pct = 1;
+    } else if (now < readyAt) {
+      const leftMs = readyAt - now;
+      const left = Math.ceil(leftMs / 100) / 10;
+      label = `Boost: COOLDOWN ${left.toFixed(1)}s`;
+      pct = 1 - Phaser.Math.Clamp(leftMs / cdMs, 0, 1);
+    }
+
+    this.ui.boostText.setText(label);
+
+    const x = 16;
+    const y = 118;
+    const w = 200;
+    const h = 10;
+
+    this.ui.boostBar.clear();
+    this.ui.boostBar.lineStyle(2, 0xffffff, 0.35);
+    this.ui.boostBar.strokeRect(x, y, w, h);
+    this.ui.boostBar.fillStyle(0xffffff, 0.35);
+    this.ui.boostBar.fillRect(x, y, Math.floor(w * pct), h);
+
+    const active = this.registry.get("roundActive");
+    const msg = this.registry.get("message") || "";
+
+    if (!active && msg) {
+      this.ui.centerMsg.setText(msg);
+      this.ui.centerMsg.setAlpha(1);
+      this.ui.subMsg.setAlpha(1);
+    } else {
+      this.ui.centerMsg.setAlpha(0);
+      this.ui.subMsg.setAlpha(0);
+    }
+  }
+}
