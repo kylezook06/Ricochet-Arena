@@ -100,6 +100,8 @@ class UIScene extends Phaser.Scene {
 
     if (!active && msg) {
       this.ui.centerMsg.setText(msg);
+      const sub = this.registry.get("subMessage") || "Press R to Restart";
+      this.ui.subMsg.setText(sub);
       this.ui.centerMsg.setAlpha(1);
       this.ui.subMsg.setAlpha(1);
     } else {

@@ -64,8 +64,10 @@ class GameScene extends Phaser.Scene {
   }
 
   init() {
-    this.registry.set("roundActive", true);
-    this.registry.set("message", "");
+    this.registry.set("roundActive", false);
+    this.registry.set("gameState", "menu");
+    this.registry.set("message", "PRESS SPACE TO START");
+    this.registry.set("subMessage", "Press SPACE to start • P/ESC pause • R restart");
     this.registry.set("score", 0);
 
     this.registry.set("playerHP", 5);
@@ -88,6 +90,8 @@ class GameScene extends Phaser.Scene {
       a: Phaser.Input.Keyboard.KeyCodes.A,
       s: Phaser.Input.Keyboard.KeyCodes.S,
       d: Phaser.Input.Keyboard.KeyCodes.D,
+      p: Phaser.Input.Keyboard.KeyCodes.P,
+      esc: Phaser.Input.Keyboard.KeyCodes.ESC,
       shift: Phaser.Input.Keyboard.KeyCodes.SHIFT,
       space: Phaser.Input.Keyboard.KeyCodes.SPACE,
       r: Phaser.Input.Keyboard.KeyCodes.R
@@ -183,6 +187,9 @@ class GameScene extends Phaser.Scene {
         this.scale.startFullscreen();
       }
     });
+
+    // Freeze world until player starts
+    this.physics.world.pause();
   }
 
   update(time, delta) {
@@ -192,6 +199,21 @@ class GameScene extends Phaser.Scene {
       this.scene.restart();
       return;
     }
+
+    if (this.registry.get("gameState") === "menu") {
+      if (Phaser.Input.Keyboard.JustDown(this.keys.space)) {
+        this._startRound();
+      }
+      return;
+    }
+
+    if (Phaser.Input.Keyboard.JustDown(this.keys.p) || Phaser.Input.Keyboard.JustDown(this.keys.esc)) {
+      const state = this.registry.get("gameState");
+      if (state === "playing") this._pauseGame();
+      else if (state === "paused") this._resumeGame();
+    }
+
+    if (this.registry.get("gameState") === "paused") return;
 
     if (!this.registry.get("roundActive")) return;
 
@@ -248,6 +270,55 @@ class GameScene extends Phaser.Scene {
       .refreshBody();
 
     this.walls.children.iterate(w => w.setVisible(false));
+  }
+
+  _startRound() {
+    this.registry.set("roundActive", true);
+    this.registry.set("gameState", "playing");
+    this.registry.set("message", "");
+    this.registry.set("subMessage", "P/ESC pause • R restart");
+
+    this.registry.set("playerHP", 5);
+    this.registry.set("aiHP", 5);
+    this.registry.set("timeLeft", this.ROUND_SECONDS);
+
+    if (this.bullets) {
+      this.bullets.children.iterate((b) => {
+        if (b && typeof b.destroy === "function") b.destroy();
+      });
+      if (typeof this.bullets.clear === "function") {
+        this.bullets.clear(true, true);
+      }
+    }
+
+    this.player.body.setVelocity(0, 0);
+    this.ai.body.setVelocity(0, 0);
+
+    this.physics.world.resume();
+  }
+
+  _pauseGame() {
+    if (!this.registry.get("roundActive")) return;
+
+    this.registry.set("roundActive", false);
+    this.registry.set("gameState", "paused");
+    this.registry.set("message", "PAUSED");
+    this.registry.set("subMessage", "Press P/ESC to resume • R restart");
+
+    this.player.body.setVelocity(0, 0);
+    this.ai.body.setVelocity(0, 0);
+    this.physics.world.pause();
+  }
+
+  _resumeGame() {
+    if (this.registry.get("gameState") !== "paused") return;
+
+    this.registry.set("roundActive", true);
+    this.registry.set("gameState", "playing");
+    this.registry.set("message", "");
+    this.registry.set("subMessage", "P/ESC pause • R restart");
+
+    this.physics.world.resume();
   }
 
   _createObstacles() {
