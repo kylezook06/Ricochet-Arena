@@ -91,16 +91,18 @@ class GameScene extends Phaser.Scene {
     });
 
     // Bullets hit tanks
-    this.physics.add.overlap(this.bullets, this.player, (bullet) => {
+    this.physics.add.overlap(this.bullets, this.player, (obj1, obj2) => {
       if (!this.registry.get("roundActive")) return;
-      if (!bullet.active) return;
+      const bullet = this._resolveBullet(obj1, obj2);
+      if (!bullet || !bullet.active) return;
       if (bullet.getData("owner") === "player") return;
       this._onTankHit("player", bullet);
     });
 
-    this.physics.add.overlap(this.bullets, this.ai, (bullet) => {
+    this.physics.add.overlap(this.bullets, this.ai, (obj1, obj2) => {
       if (!this.registry.get("roundActive")) return;
-      if (!bullet.active) return;
+      const bullet = this._resolveBullet(obj1, obj2);
+      if (!bullet || !bullet.active) return;
       if (bullet.getData("owner") === "ai") return;
       this._onTankHit("ai", bullet);
     });
@@ -329,6 +331,14 @@ class GameScene extends Phaser.Scene {
   // Bullets / Combat
   // -----------------------------
 
+  _resolveBullet(obj1, obj2) {
+    const isBullet = (obj) => obj && obj.texture && obj.texture.key === "bullet" && obj.body;
+
+    if (isBullet(obj1)) return obj1;
+    if (isBullet(obj2)) return obj2;
+    return null;
+  }
+
   _fireBullet(shooter, owner, time) {
     const dir = new Phaser.Math.Vector2(1, 0).rotate(shooter.rotation);
     const spawnOffset = 28;
@@ -363,6 +373,7 @@ class GameScene extends Phaser.Scene {
   }
 
   _onTankHit(which, bullet) {
+    if (!bullet || !bullet.texture || bullet.texture.key !== "bullet") return;
     const tank = (which === "player") ? this.player : this.ai;
 
     const now = this.time.now;
