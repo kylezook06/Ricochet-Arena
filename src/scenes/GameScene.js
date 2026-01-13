@@ -32,6 +32,35 @@ class GameScene extends Phaser.Scene {
       wobble: 0.65,
       retreatDist: 140
     };
+
+    this.LAYOUTS = [
+      [
+        { x: 0.50, y: 0.50, w: 80, h: 80 },
+        { x: 0.50, y: 0.33, w: 140, h: 18 },
+        { x: 0.50, y: 0.67, w: 140, h: 18 },
+        { x: 0.25, y: 0.50, w: 18, h: 160 },
+        { x: 0.75, y: 0.50, w: 18, h: 160 }
+      ],
+      [
+        { x: 0.35, y: 0.40, w: 220, h: 18 },
+        { x: 0.65, y: 0.60, w: 220, h: 18 },
+        { x: 0.35, y: 0.60, w: 18, h: 160 },
+        { x: 0.65, y: 0.40, w: 18, h: 160 }
+      ],
+      [
+        { x: 0.33, y: 0.33, w: 40, h: 40 },
+        { x: 0.67, y: 0.33, w: 40, h: 40 },
+        { x: 0.33, y: 0.67, w: 40, h: 40 },
+        { x: 0.67, y: 0.67, w: 40, h: 40 },
+        { x: 0.50, y: 0.50, w: 50, h: 50 }
+      ],
+      [
+        { x: 0.30, y: 0.30, w: 140, h: 18 },
+        { x: 0.70, y: 0.70, w: 140, h: 18 },
+        { x: 0.70, y: 0.30, w: 18, h: 140 },
+        { x: 0.30, y: 0.70, w: 18, h: 140 }
+      ]
+    ];
   }
 
   init() {
@@ -92,8 +121,6 @@ class GameScene extends Phaser.Scene {
     // --- Collisions
     this.physics.add.collider(this.player, this.walls);
     this.physics.add.collider(this.ai, this.walls);
-    this.physics.add.collider(this.player, this.obstacles);
-    this.physics.add.collider(this.ai, this.obstacles);
 
     // Bullets bounce off walls
     this.physics.add.collider(this.bullets, this.walls, (bullet) => {
@@ -106,19 +133,6 @@ class GameScene extends Phaser.Scene {
         const s = max / sp;
         b.velocity.x *= s;
         b.velocity.y *= s;
-      }
-    });
-
-    this.physics.add.collider(this.bullets, this.obstacles, (bullet) => {
-      const body = bullet && bullet.body;
-      if (!body) return;
-
-      const sp = Math.sqrt(body.velocity.x * body.velocity.x + body.velocity.y * body.velocity.y);
-      const max = this.BULLET.speed * 1.05;
-      if (sp > max) {
-        const s = max / sp;
-        body.velocity.x *= s;
-        body.velocity.y *= s;
       }
     });
 
@@ -237,32 +251,54 @@ class GameScene extends Phaser.Scene {
   }
 
   _createObstacles() {
-    const g = this.add.graphics();
-    g.setDepth(1);
+    if (this.obstacles) {
+      this.obstacles.clear(true, true);
+    }
+    if (this.obstacleGraphics) {
+      this.obstacleGraphics.destroy();
+    }
+
+    this.obstacleGraphics = this.add.graphics();
+    this.obstacleGraphics.setDepth(1);
 
     this.obstacles = this.physics.add.staticGroup();
 
-    const blocks = [
-      { x: this.ARENA.x + this.ARENA.w / 2, y: this.ARENA.y + this.ARENA.h / 2 - 70, w: 120, h: 18 },
-      { x: this.ARENA.x + this.ARENA.w / 2, y: this.ARENA.y + this.ARENA.h / 2 + 70, w: 120, h: 18 },
-      { x: this.ARENA.x + 180, y: this.ARENA.y + this.ARENA.h / 2, w: 18, h: 140 },
-      { x: this.ARENA.x + this.ARENA.w - 180, y: this.ARENA.y + this.ARENA.h / 2, w: 18, h: 140 },
-      { x: this.ARENA.x + this.ARENA.w / 2, y: this.ARENA.y + this.ARENA.h / 2, w: 60, h: 60 }
-    ];
+    const layoutIndex = Phaser.Math.Between(0, this.LAYOUTS.length - 1);
+    this.registry.set("layoutIndex", layoutIndex);
+
+    const blocks = this.LAYOUTS[layoutIndex];
 
     blocks.forEach((b) => {
-      g.fillStyle(0x202020, 1);
-      g.fillRect(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h);
+      const x = this.ARENA.x + b.x * this.ARENA.w;
+      const y = this.ARENA.y + b.y * this.ARENA.h;
 
-      g.lineStyle(2, 0x3a3a3a, 1);
-      g.strokeRect(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h);
+      this.obstacleGraphics.fillStyle(0x202020, 1);
+      this.obstacleGraphics.fillRect(x - b.w / 2, y - b.h / 2, b.w, b.h);
 
-      const o = this.obstacles.create(b.x, b.y, null);
+      this.obstacleGraphics.lineStyle(2, 0x3a3a3a, 1);
+      this.obstacleGraphics.strokeRect(x - b.w / 2, y - b.h / 2, b.w, b.h);
+
+      const o = this.obstacles.create(x, y, null);
       o.setDisplaySize(b.w, b.h);
       o.refreshBody();
       o.setVisible(false);
     });
 
+    this.physics.add.collider(this.player, this.obstacles);
+    this.physics.add.collider(this.ai, this.obstacles);
+
+    this.physics.add.collider(this.bullets, this.obstacles, (bullet) => {
+      const body = bullet && bullet.body;
+      if (!body) return;
+
+      const sp = Math.sqrt(body.velocity.x * body.velocity.x + body.velocity.y * body.velocity.y);
+      const max = this.BULLET.speed * 1.05;
+      if (sp > max) {
+        const s = max / sp;
+        body.velocity.x *= s;
+        body.velocity.y *= s;
+      }
+    });
   }
 
   _createTankTextures() {
