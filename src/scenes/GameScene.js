@@ -251,8 +251,8 @@ class GameScene extends Phaser.Scene {
   }
 
   _createObstacles() {
-    if (this.obstacles && typeof this.obstacles.clear === "function") {
-      this.obstacles.clear(true, true);
+    if (this.obstacles && typeof this.obstacles.destroy === "function") {
+      this.obstacles.destroy(true);
     }
     if (this.obstacleGraphics) {
       this.obstacleGraphics.destroy();
