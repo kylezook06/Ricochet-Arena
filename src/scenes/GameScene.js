@@ -154,6 +154,12 @@ class GameScene extends Phaser.Scene {
     this.player.setVisible(true).setAlpha(1).setDepth(10);
     this.ai.setVisible(true).setAlpha(1).setDepth(10);
 
+    // Defensive: keep physics bodies enabled + movable
+    this.player.body.enable = true;
+    this.ai.body.enable = true;
+    this.player.body.moves = true;
+    this.ai.body.moves = true;
+
     this._updatePlayer(dt, time);
     this._updateAI(dt, time);
 
@@ -247,18 +253,22 @@ class GameScene extends Phaser.Scene {
     if (this.keys.d.isDown) turn += 1;
     this.player.rotation += turn * this.TANK.turnSpeed * dt;
 
-    const forward = new Phaser.Math.Vector2(1, 0).rotate(this.player.rotation);
+    const speedForward = this.TANK.maxSpeed;
+    const speedBack = this.TANK.maxSpeed * 0.7;
 
-    if (this.keys.w.isDown) {
-      this.player.body.velocity.x += forward.x * this.TANK.accel * dt;
-      this.player.body.velocity.y += forward.y * this.TANK.accel * dt;
-    } else if (this.keys.s.isDown) {
-      this.player.body.velocity.x -= forward.x * this.TANK.accel * dt * 0.75;
-      this.player.body.velocity.y -= forward.y * this.TANK.accel * dt * 0.75;
+    let desiredSpeed = 0;
+    if (this.keys.w.isDown) desiredSpeed = speedForward;
+    else if (this.keys.s.isDown) desiredSpeed = -speedBack;
+
+    if (desiredSpeed !== 0) {
+      this.physics.velocityFromRotation(
+        this.player.rotation,
+        desiredSpeed,
+        this.player.body.velocity
+      );
+    } else {
+      this.player.body.velocity.scale(this.TANK.friction);
     }
-
-    this.player.body.velocity.x *= this.TANK.friction;
-    this.player.body.velocity.y *= this.TANK.friction;
 
     if (this.keys.space.isDown) {
       if (time - this.lastPlayerShotAt >= this.BULLET.cooldownMs) {
@@ -288,21 +298,22 @@ class GameScene extends Phaser.Scene {
     diff = Phaser.Math.Clamp(diff, -maxTurn, maxTurn);
     a.rotation += diff;
 
-    const fwd = new Phaser.Math.Vector2(1, 0).rotate(a.rotation);
+    let desiredSpeed = 0;
 
     if (dist < this.AI.retreatDist) {
-      a.body.velocity.x -= fwd.x * this.TANK.accel * dt * 0.35;
-      a.body.velocity.y -= fwd.y * this.TANK.accel * dt * 0.35;
+      desiredSpeed = -this.TANK.maxSpeed * 0.35;
       a.rotation += (Math.random() > 0.5 ? 1 : -1) * this.TANK.turnSpeed * 0.5 * dt;
     } else {
       if (Math.random() < this.AI.moveBias) {
-        a.body.velocity.x += fwd.x * this.TANK.accel * dt * 0.65;
-        a.body.velocity.y += fwd.y * this.TANK.accel * dt * 0.65;
+        desiredSpeed = this.TANK.maxSpeed * 0.55;
       }
     }
 
-    a.body.velocity.x *= this.TANK.friction;
-    a.body.velocity.y *= this.TANK.friction;
+    if (desiredSpeed !== 0) {
+      this.physics.velocityFromRotation(a.rotation, desiredSpeed, a.body.velocity);
+    } else {
+      a.body.velocity.scale(this.TANK.friction);
+    }
 
     const facing = Math.abs(Phaser.Math.Angle.Wrap(desiredAngle - a.rotation));
     if (facing < 0.35) {
@@ -366,6 +377,8 @@ class GameScene extends Phaser.Scene {
     bullet.disableBody(true, true);
 
     const tank = (which === "player") ? this.player : this.ai;
+    tank.body.enable = true;
+    tank.body.moves = true;
 
     tank.setDepth(10);
     tank.setVisible(true);
