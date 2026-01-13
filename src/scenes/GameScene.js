@@ -67,6 +67,9 @@ class GameScene extends Phaser.Scene {
     // --- Arena walls
     this._createArena();
 
+    // --- Obstacles (static blocks inside arena)
+    this._createObstacles();
+
     // --- Placeholder textures
     this._createTankTextures();
 
@@ -216,6 +219,50 @@ class GameScene extends Phaser.Scene {
       .refreshBody();
 
     this.walls.children.iterate(w => w.setVisible(false));
+  }
+
+  _createObstacles() {
+    const g = this.add.graphics();
+    g.setDepth(1);
+
+    this.obstacles = this.physics.add.staticGroup();
+
+    const blocks = [
+      { x: this.ARENA.x + this.ARENA.w / 2, y: this.ARENA.y + this.ARENA.h / 2 - 70, w: 120, h: 18 },
+      { x: this.ARENA.x + this.ARENA.w / 2, y: this.ARENA.y + this.ARENA.h / 2 + 70, w: 120, h: 18 },
+      { x: this.ARENA.x + 180, y: this.ARENA.y + this.ARENA.h / 2, w: 18, h: 140 },
+      { x: this.ARENA.x + this.ARENA.w - 180, y: this.ARENA.y + this.ARENA.h / 2, w: 18, h: 140 },
+      { x: this.ARENA.x + this.ARENA.w / 2, y: this.ARENA.y + this.ARENA.h / 2, w: 60, h: 60 }
+    ];
+
+    blocks.forEach((b) => {
+      g.fillStyle(0x202020, 1);
+      g.fillRect(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h);
+
+      g.lineStyle(2, 0x3a3a3a, 1);
+      g.strokeRect(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h);
+
+      const o = this.obstacles.create(b.x, b.y, null);
+      o.setDisplaySize(b.w, b.h);
+      o.refreshBody();
+      o.setVisible(false);
+    });
+
+    this.physics.add.collider(this.player, this.obstacles);
+    this.physics.add.collider(this.ai, this.obstacles);
+
+    this.physics.add.collider(this.bullets, this.obstacles, (bullet) => {
+      const body = bullet && bullet.body;
+      if (!body) return;
+
+      const sp = Math.sqrt(body.velocity.x * body.velocity.x + body.velocity.y * body.velocity.y);
+      const max = this.BULLET.speed * 1.05;
+      if (sp > max) {
+        const s = max / sp;
+        body.velocity.x *= s;
+        body.velocity.y *= s;
+      }
+    });
   }
 
   _createTankTextures() {
