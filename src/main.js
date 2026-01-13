@@ -3,7 +3,8 @@
     type: Phaser.AUTO,
     width: 960,
     height: 540,
-    backgroundColor: "#141414",
+    parent: "game",
+    backgroundColor: "#0b0b0b",
     physics: {
       default: "arcade",
       arcade: {

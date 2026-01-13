@@ -70,10 +70,7 @@ class GameScene extends Phaser.Scene {
     );
 
     // --- Bullets pool
-    this.bullets = this.physics.add.group({
-      classType: Phaser.Physics.Arcade.Image,
-      maxSize: 200
-    });
+    this.bullets = this.physics.add.group();
 
     // --- Collisions
     this.physics.add.collider(this.player, this.walls);
@@ -328,57 +325,51 @@ class GameScene extends Phaser.Scene {
   // Bullets / Combat
   // -----------------------------
 
-  // Re-enable/reset pooled bullets after disableBody()
   _fireBullet(shooter, owner, time) {
     const dir = new Phaser.Math.Vector2(1, 0).rotate(shooter.rotation);
     const spawnOffset = 28;
     const x = shooter.x + dir.x * spawnOffset;
     const y = shooter.y + dir.y * spawnOffset;
 
-    let bullet = this.bullets.get(x, y, "bullet");
+    const bullet = this.bullets.create(x, y, "bullet");
     if (!bullet) return;
 
-    // If this bullet was previously disabled, this re-enables its body properly.
-    bullet.enableBody(true, x, y, true, true);
-
-    bullet.setTexture("bullet");
-    bullet.setActive(true);
-    bullet.setVisible(true);
     bullet.setDepth(5);
 
     bullet.setData("owner", owner);
     bullet.setData("bornAt", time);
-    bullet.setData("alreadyHit", false);
 
-    // Ensure body settings are re-applied (pooled objects can lose state)
     bullet.body.setAllowGravity(false);
     bullet.body.setCircle(4);
     bullet.setBounce(1, 1);
 
-    bullet.body.reset(x, y);
     bullet.body.setVelocity(dir.x * this.BULLET.speed, dir.y * this.BULLET.speed);
   }
 
   _cleanupBullets(time) {
     this.bullets.children.iterate((b) => {
-      if (!b || !b.active) return;
-      const age = time - b.getData("bornAt");
+      if (!b) return;
+      const bornAt = b.getData("bornAt");
+      if (bornAt == null) return;
+      const age = time - bornAt;
       if (age > this.BULLET.lifeMs) {
-        b.disableBody(true, true);
+        b.destroy();
       }
     });
   }
 
   _onTankHit(which, bullet) {
-    if (!bullet || !bullet.active) return;
-    if (bullet.getData("alreadyHit")) return;
-    bullet.setData("alreadyHit", true);
-
-    bullet.disableBody(true, true);
-
     const tank = (which === "player") ? this.player : this.ai;
-    tank.body.enable = true;
-    tank.body.moves = true;
+
+    const now = this.time.now;
+    const invulnUntil = tank.getData("invulnUntil") || 0;
+    if (now < invulnUntil) {
+      if (bullet) bullet.destroy();
+      return;
+    }
+    tank.setData("invulnUntil", now + 120);
+
+    if (bullet) bullet.destroy();
 
     tank.setDepth(10);
     tank.setVisible(true);
