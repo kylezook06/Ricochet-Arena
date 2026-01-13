@@ -147,6 +147,10 @@ class GameScene extends Phaser.Scene {
 
     if (!this.registry.get("roundActive")) return;
 
+    if (!this.player || !this.ai || !this.player.body || !this.ai.body) {
+      return;
+    }
+
     // Always keep tanks visible/on-top (defensive)
     this.player.setVisible(true).setAlpha(1).setDepth(10);
     this.ai.setVisible(true).setAlpha(1).setDepth(10);
