@@ -32,6 +32,12 @@ class UIScene extends Phaser.Scene {
 
     this.ui.boostBar = this.add.graphics();
 
+    this.ui.matchText = this.add.text(16, 134, "", {
+      fontFamily: "Arial",
+      fontSize: "18px",
+      color: "#eaeaea"
+    });
+
     this.ui.centerMsg = this.add.text(480, 270, "", {
       fontFamily: "Arial",
       fontSize: "34px",
@@ -39,10 +45,11 @@ class UIScene extends Phaser.Scene {
       align: "center"
     }).setOrigin(0.5).setAlpha(0);
 
-    this.ui.subMsg = this.add.text(480, 315, "Press R to Restart", {
+    this.ui.subMsg = this.add.text(480, 330, "Press R to Restart", {
       fontFamily: "Arial",
       fontSize: "18px",
-      color: "#cfcfcf"
+      color: "#cfcfcf",
+      align: "center"
     }).setOrigin(0.5).setAlpha(0);
 
     // Update UI frequently
@@ -63,6 +70,13 @@ class UIScene extends Phaser.Scene {
     this.ui.timeText.setText(`Time Left: ${t}s`);
     this.ui.scoreText.setText(`Score: ${score}`);
 
+    // Match info
+    const pW = this.registry.get("playerWins") || 0;
+    const aW = this.registry.get("aiWins") || 0;
+    const toWin = this.registry.get("winsToWin") || 3;
+    this.ui.matchText.setText(`Match  You: ${pW}    AI: ${aW}   (First to ${toWin})`);
+
+    // Boost UI
     const now = this.time.now;
     const activeUntil = this.registry.get("boostActiveUntil") || 0;
     const readyAt = this.registry.get("boostReadyAt") || 0;
@@ -95,6 +109,7 @@ class UIScene extends Phaser.Scene {
     this.ui.boostBar.fillStyle(0xffffff, 0.35);
     this.ui.boostBar.fillRect(x, y, Math.floor(w * pct), h);
 
+    // Center overlay messages
     const active = this.registry.get("roundActive");
     const msg = this.registry.get("message") || "";
 

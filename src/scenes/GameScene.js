@@ -5,7 +5,8 @@ class GameScene extends Phaser.Scene {
     // Gameplay constants
     this.ARENA = { x: 80, y: 60, w: 800, h: 420 };
 
-    this.ROUND_SECONDS = 90; // 1–2 min target
+    this.ROUND_SECONDS = 90; // default
+    this.ROUND_OPTIONS = [60, 90, 120];
 
     this.TANK = {
       turnSpeed: 2.8,
@@ -33,6 +34,7 @@ class GameScene extends Phaser.Scene {
       retreatDist: 140
     };
 
+    // Obstacle layouts (normalized positions inside arena)
     this.LAYOUTS = [
       [
         { x: 0.50, y: 0.50, w: 80, h: 80 },
@@ -64,23 +66,33 @@ class GameScene extends Phaser.Scene {
   }
 
   init() {
-    this.registry.set("roundActive", false);
-    this.registry.set("gameState", "menu");
-    this.registry.set("message", "PRESS SPACE TO START");
-    this.registry.set("subMessage", "Press SPACE to start • P/ESC pause • R restart");
-    this.registry.set("score", 0);
+    // ---- Match settings / state
+    const defaultIndex = this.ROUND_OPTIONS.indexOf(this.ROUND_SECONDS);
+    this.registry.set("roundOptIndex", defaultIndex >= 0 ? defaultIndex : 1);
+    this.registry.set("roundSeconds", this.ROUND_OPTIONS[this.registry.get("roundOptIndex")] || this.ROUND_SECONDS);
 
+    this.registry.set("winsToWin", 3);
+    this.registry.set("playerWins", 0);
+    this.registry.set("aiWins", 0);
+
+    // ---- Game state
+    this.registry.set("roundActive", false);
+    this.registry.set("gameState", "menu"); // menu | playing | paused | betweenRounds
+
+    // ---- Run state
+    this.registry.set("score", 0);
     this.registry.set("playerHP", 5);
     this.registry.set("aiHP", 5);
+    this.registry.set("timeLeft", this.registry.get("roundSeconds"));
 
-    this.registry.set("timeLeft", this.ROUND_SECONDS);
-
+    // ---- Boost state (for UI)
     this.boostActiveUntil = 0;
     this.boostReadyAt = 0;
-
     this.registry.set("boostActiveUntil", 0);
     this.registry.set("boostReadyAt", 0);
     this.registry.set("boostCooldownMs", this.BOOST.cooldownMs);
+
+    this._refreshMenuText();
   }
 
   create() {
@@ -90,8 +102,13 @@ class GameScene extends Phaser.Scene {
       a: Phaser.Input.Keyboard.KeyCodes.A,
       s: Phaser.Input.Keyboard.KeyCodes.S,
       d: Phaser.Input.Keyboard.KeyCodes.D,
+
+      left: Phaser.Input.Keyboard.KeyCodes.LEFT,
+      right: Phaser.Input.Keyboard.KeyCodes.RIGHT,
+
       p: Phaser.Input.Keyboard.KeyCodes.P,
       esc: Phaser.Input.Keyboard.KeyCodes.ESC,
+
       shift: Phaser.Input.Keyboard.KeyCodes.SHIFT,
       space: Phaser.Input.Keyboard.KeyCodes.SPACE,
       r: Phaser.Input.Keyboard.KeyCodes.R
@@ -116,10 +133,10 @@ class GameScene extends Phaser.Scene {
       "tank_ai"
     );
 
-    // --- Bullets pool
+    // --- Bullets
     this.bullets = this.physics.add.group();
 
-    // --- Obstacles (static blocks inside arena)
+    // --- Obstacles
     this._createObstacles();
 
     // --- Collisions
@@ -168,24 +185,22 @@ class GameScene extends Phaser.Scene {
         if (!this.registry.get("roundActive")) return;
         const t = Math.max(0, this.registry.get("timeLeft") - 1);
         this.registry.set("timeLeft", t);
-        if (t <= 0) this._endRound(false, "TIME UP — You Lose");
+        if (t <= 0) this._endRound(false, "TIME UP — Round Lost");
       }
     });
 
-    // Hint
+    // Hint (bottom)
     this.add.text(
       this.ARENA.x,
       this.ARENA.y + this.ARENA.h + 18,
-      "W/S move • A/D turn • SHIFT boost • SPACE fire (ricochets!) • R restart",
+      "W/S move • A/D turn • SHIFT boost • SPACE fire • ←/→ set time (menu) • P/ESC pause • R restart • F fullscreen",
       { fontFamily: "Arial", fontSize: "14px", color: "#cfcfcf" }
     ).setAlpha(0.85);
 
+    // Fullscreen toggle
     this.input.keyboard.on("keydown-F", () => {
-      if (this.scale.isFullscreen) {
-        this.scale.stopFullscreen();
-      } else {
-        this.scale.startFullscreen();
-      }
+      if (this.scale.isFullscreen) this.scale.stopFullscreen();
+      else this.scale.startFullscreen();
     });
 
     // Freeze world until player starts
@@ -200,32 +215,47 @@ class GameScene extends Phaser.Scene {
       return;
     }
 
-    if (this.registry.get("gameState") === "menu") {
+    const state = this.registry.get("gameState");
+
+    // ---- MENU (configure options)
+    if (state === "menu") {
+      if (Phaser.Input.Keyboard.JustDown(this.keys.left)) {
+        this._cycleRoundOption(-1);
+      } else if (Phaser.Input.Keyboard.JustDown(this.keys.right)) {
+        this._cycleRoundOption(+1);
+      }
+
       if (Phaser.Input.Keyboard.JustDown(this.keys.space)) {
+        this._startMatch();
+      }
+      return;
+    }
+
+    // ---- BETWEEN ROUNDS
+    if (state === "betweenRounds") {
+      if (Phaser.Input.Keyboard.JustDown(this.keys.space)) {
+        // Start next round, keep match wins
         this._startRound();
       }
       return;
     }
 
+    // ---- Pause toggle (only while playing/paused)
     if (Phaser.Input.Keyboard.JustDown(this.keys.p) || Phaser.Input.Keyboard.JustDown(this.keys.esc)) {
-      const state = this.registry.get("gameState");
-      if (state === "playing") this._pauseGame();
-      else if (state === "paused") this._resumeGame();
+      const s = this.registry.get("gameState");
+      if (s === "playing") this._pauseGame();
+      else if (s === "paused") this._resumeGame();
     }
 
     if (this.registry.get("gameState") === "paused") return;
-
     if (!this.registry.get("roundActive")) return;
 
-    if (!this.player || !this.ai || !this.player.body || !this.ai.body) {
-      return;
-    }
+    if (!this.player || !this.ai || !this.player.body || !this.ai.body) return;
 
-    // Always keep tanks visible/on-top (defensive)
+    // Defensive: keep visible + physics enabled
     this.player.setVisible(true).setAlpha(1).setDepth(10);
     this.ai.setVisible(true).setAlpha(1).setDepth(10);
 
-    // Defensive: keep physics bodies enabled + movable
     this.player.body.enable = true;
     this.ai.body.enable = true;
     this.player.body.moves = true;
@@ -233,8 +263,100 @@ class GameScene extends Phaser.Scene {
 
     this._updatePlayer(dt, time);
     this._updateAI(dt, time);
-
     this._cleanupBullets(time);
+  }
+
+  // -----------------------------
+  // Menu / Match flow
+  // -----------------------------
+  _refreshMenuText() {
+    const secs = this.registry.get("roundSeconds") || this.ROUND_SECONDS;
+    const winsToWin = this.registry.get("winsToWin") || 3;
+
+    this.registry.set(
+      "message",
+      `RICOCHET ARENA\nRound: ${secs}s (←/→)\nFirst to ${winsToWin} wins`
+    );
+    this.registry.set(
+      "subMessage",
+      "Press SPACE to start • P/ESC pause • R restart • F fullscreen"
+    );
+  }
+
+  _cycleRoundOption(dir) {
+    const len = this.ROUND_OPTIONS.length;
+    let idx = this.registry.get("roundOptIndex") || 0;
+    idx = (idx + dir + len) % len;
+
+    this.registry.set("roundOptIndex", idx);
+    this.registry.set("roundSeconds", this.ROUND_OPTIONS[idx]);
+
+    this._refreshMenuText();
+  }
+
+  _startMatch() {
+    // Reset match + score, then begin round 1
+    this.registry.set("playerWins", 0);
+    this.registry.set("aiWins", 0);
+    this.registry.set("score", 0);
+    this._startRound();
+  }
+
+  _startRound() {
+    this.registry.set("roundActive", true);
+    this.registry.set("gameState", "playing");
+    this.registry.set("message", "");
+    this.registry.set("subMessage", "P/ESC pause • R restart");
+
+    this.registry.set("playerHP", 5);
+    this.registry.set("aiHP", 5);
+
+    const secs = this.registry.get("roundSeconds") || this.ROUND_SECONDS;
+    this.registry.set("timeLeft", secs);
+
+    // New round: clear bullets
+    if (this.bullets) {
+      this.bullets.children.iterate((b) => {
+        if (b && typeof b.destroy === "function") b.destroy();
+      });
+      if (typeof this.bullets.clear === "function") {
+        this.bullets.clear(true, true);
+      }
+    }
+
+    // New round: new obstacle layout (optional but nice)
+    this._createObstacles();
+
+    // Reset tank motion (keep positions where they are; you can also respawn if desired)
+    this.player.body.setVelocity(0, 0);
+    this.ai.body.setVelocity(0, 0);
+
+    // Resume physics
+    this.physics.world.resume();
+  }
+
+  _pauseGame() {
+    if (!this.registry.get("roundActive")) return;
+
+    this.registry.set("roundActive", false);
+    this.registry.set("gameState", "paused");
+    this.registry.set("message", "PAUSED");
+    this.registry.set("subMessage", "Press P/ESC to resume • R restart");
+
+    this.player.body.setVelocity(0, 0);
+    this.ai.body.setVelocity(0, 0);
+    this.physics.world.pause();
+  }
+
+  _resumeGame() {
+    if (this.registry.get("gameState") !== "paused") return;
+
+    this.registry.set("roundActive", true);
+    this.registry.set("gameState", "playing");
+    this.registry.set("message", "");
+    this.registry.set("subMessage", "P/ESC pause • R restart");
+
+    this.physics.world.resume();
   }
 
   // -----------------------------
@@ -272,55 +394,6 @@ class GameScene extends Phaser.Scene {
     this.walls.children.iterate(w => w.setVisible(false));
   }
 
-  _startRound() {
-    this.registry.set("roundActive", true);
-    this.registry.set("gameState", "playing");
-    this.registry.set("message", "");
-    this.registry.set("subMessage", "P/ESC pause • R restart");
-
-    this.registry.set("playerHP", 5);
-    this.registry.set("aiHP", 5);
-    this.registry.set("timeLeft", this.ROUND_SECONDS);
-
-    if (this.bullets) {
-      this.bullets.children.iterate((b) => {
-        if (b && typeof b.destroy === "function") b.destroy();
-      });
-      if (typeof this.bullets.clear === "function") {
-        this.bullets.clear(true, true);
-      }
-    }
-
-    this.player.body.setVelocity(0, 0);
-    this.ai.body.setVelocity(0, 0);
-
-    this.physics.world.resume();
-  }
-
-  _pauseGame() {
-    if (!this.registry.get("roundActive")) return;
-
-    this.registry.set("roundActive", false);
-    this.registry.set("gameState", "paused");
-    this.registry.set("message", "PAUSED");
-    this.registry.set("subMessage", "Press P/ESC to resume • R restart");
-
-    this.player.body.setVelocity(0, 0);
-    this.ai.body.setVelocity(0, 0);
-    this.physics.world.pause();
-  }
-
-  _resumeGame() {
-    if (this.registry.get("gameState") !== "paused") return;
-
-    this.registry.set("roundActive", true);
-    this.registry.set("gameState", "playing");
-    this.registry.set("message", "");
-    this.registry.set("subMessage", "P/ESC pause • R restart");
-
-    this.physics.world.resume();
-  }
-
   _createObstacles() {
     if (this.obstacles && typeof this.obstacles.destroy === "function") {
       this.obstacles.destroy(true);
@@ -355,6 +428,7 @@ class GameScene extends Phaser.Scene {
       o.setVisible(false);
     });
 
+    // Ensure colliders exist even if called multiple times
     this.physics.add.collider(this.player, this.obstacles);
     this.physics.add.collider(this.ai, this.obstacles);
 
@@ -518,10 +592,8 @@ class GameScene extends Phaser.Scene {
   // -----------------------------
   // Bullets / Combat
   // -----------------------------
-
   _resolveBullet(obj1, obj2) {
     const isBullet = (obj) => obj && obj.texture && obj.texture.key === "bullet" && obj.body;
-
     if (isBullet(obj1)) return obj1;
     if (isBullet(obj2)) return obj2;
     return null;
@@ -537,7 +609,6 @@ class GameScene extends Phaser.Scene {
     if (!bullet) return;
 
     bullet.setDepth(5);
-
     bullet.setData("owner", owner);
     bullet.setData("bornAt", time);
 
@@ -554,35 +625,30 @@ class GameScene extends Phaser.Scene {
       const bornAt = b.getData("bornAt");
       if (bornAt == null) return;
       const age = time - bornAt;
-      if (age > this.BULLET.lifeMs) {
-        b.destroy();
-      }
+      if (age > this.BULLET.lifeMs) b.destroy();
     });
   }
 
   _onTankHit(which, bullet) {
     if (!bullet || !bullet.texture || bullet.texture.key !== "bullet") return;
+
     const tank = (which === "player") ? this.player : this.ai;
 
     const now = this.time.now;
     const invulnUntil = tank.getData("invulnUntil") || 0;
     if (now < invulnUntil) {
-      if (bullet) bullet.destroy();
+      bullet.destroy();
       return;
     }
     tank.setData("invulnUntil", now + 120);
 
-    if (bullet) bullet.destroy();
-
-    tank.setDepth(10);
-    tank.setVisible(true);
-    tank.setAlpha(1);
+    bullet.destroy();
 
     if (which === "player") {
       const hp = this.registry.get("playerHP") - 1;
       this.registry.set("playerHP", hp);
       this._flashTank(tank);
-      if (hp <= 0) this._endRound(false, "DESTROYED — You Lose");
+      if (hp <= 0) this._endRound(false, "DESTROYED — Round Lost");
     } else {
       const hp = this.registry.get("aiHP") - 1;
       this.registry.set("aiHP", hp);
@@ -590,31 +656,62 @@ class GameScene extends Phaser.Scene {
 
       this.registry.set("score", this.registry.get("score") + 100);
 
-      if (hp <= 0) this._endRound(true, "AI DESTROYED — You Win!");
+      if (hp <= 0) this._endRound(true, "AI DESTROYED — Round Won");
     }
   }
 
   _flashTank(tank) {
-    tank.setVisible(true);
     tank.setAlpha(0.35);
-    this.time.delayedCall(80, () => {
-      tank.setVisible(true);
-      tank.setAlpha(1);
-    });
+    this.time.delayedCall(80, () => tank.setAlpha(1));
   }
 
-  _endRound(win, message) {
+  _endRound(playerWon, message) {
     if (!this.registry.get("roundActive")) return;
 
     this.registry.set("roundActive", false);
-    this.registry.set("message", message);
 
-    if (win) {
-      const t = this.registry.get("timeLeft");
-      this.registry.set("score", this.registry.get("score") + t * 10);
-    }
-
+    // Stop physics immediately so nothing “keeps happening” between rounds
     this.player.body.setVelocity(0, 0);
     this.ai.body.setVelocity(0, 0);
+    this.physics.world.pause();
+
+    // Update match wins
+    const winsToWin = this.registry.get("winsToWin") || 3;
+
+    if (playerWon) {
+      this.registry.set("playerWins", (this.registry.get("playerWins") || 0) + 1);
+      const t = this.registry.get("timeLeft");
+      this.registry.set("score", this.registry.get("score") + t * 10);
+    } else {
+      this.registry.set("aiWins", (this.registry.get("aiWins") || 0) + 1);
+    }
+
+    const pW = this.registry.get("playerWins") || 0;
+    const aW = this.registry.get("aiWins") || 0;
+
+    // Match end?
+    if (pW >= winsToWin || aW >= winsToWin) {
+      this.registry.set("gameState", "menu");
+
+      if (pW >= winsToWin) {
+        this.registry.set("message", "MATCH WON");
+      } else {
+        this.registry.set("message", "MATCH LOST");
+      }
+
+      this.registry.set(
+        "subMessage",
+        `Final: You ${pW} – AI ${aW} • ←/→ set time • SPACE new match • R restart`
+      );
+      return;
+    }
+
+    // Otherwise: between rounds
+    this.registry.set("gameState", "betweenRounds");
+    this.registry.set("message", message);
+    this.registry.set(
+      "subMessage",
+      `Match: You ${pW} – AI ${aW} (first to ${winsToWin}) • SPACE next round • R restart`
+    );
   }
 }
