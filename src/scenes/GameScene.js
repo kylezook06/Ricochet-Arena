@@ -395,6 +395,18 @@ class GameScene extends Phaser.Scene {
   }
 
   _createObstacles() {
+    if (this.obstacleColliders) {
+      this.obstacleColliders.forEach((collider) => {
+        if (collider && typeof collider.destroy === "function") {
+          collider.destroy();
+        }
+      });
+      this.obstacleColliders = [];
+    }
+    if (this.obstacleBulletCollider && typeof this.obstacleBulletCollider.destroy === "function") {
+      this.obstacleBulletCollider.destroy();
+      this.obstacleBulletCollider = null;
+    }
     if (this.obstacles && typeof this.obstacles.destroy === "function") {
       this.obstacles.destroy(true);
     }
@@ -429,10 +441,12 @@ class GameScene extends Phaser.Scene {
     });
 
     // Ensure colliders exist even if called multiple times
-    this.physics.add.collider(this.player, this.obstacles);
-    this.physics.add.collider(this.ai, this.obstacles);
+    this.obstacleColliders = [
+      this.physics.add.collider(this.player, this.obstacles),
+      this.physics.add.collider(this.ai, this.obstacles)
+    ];
 
-    this.physics.add.collider(this.bullets, this.obstacles, (bullet) => {
+    this.obstacleBulletCollider = this.physics.add.collider(this.bullets, this.obstacles, (bullet) => {
       const body = bullet && bullet.body;
       if (!body) return;
 
