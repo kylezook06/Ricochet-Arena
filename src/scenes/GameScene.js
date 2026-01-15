@@ -212,6 +212,20 @@ class GameScene extends Phaser.Scene {
       else this.scale.startFullscreen();
     });
 
+    // --- Hit sparks (particles)
+    this.sparks = this.add.particles(0, 0, "spark", {
+      emitting: false,
+      lifespan: { min: 140, max: 240 },
+      speed: { min: 70, max: 220 },
+      angle: { min: 0, max: 360 },
+      quantity: 10,
+      scale: { start: 1.0, end: 0.0 },
+      alpha: { start: 1.0, end: 0.0 },
+      rotate: { min: 0, max: 360 },
+      gravityY: 0
+    });
+    this.sparks.setDepth(20);
+
     // Freeze world until player starts
     this.physics.world.pause();
   }
@@ -557,6 +571,15 @@ class GameScene extends Phaser.Scene {
       bg.generateTexture("bullet", 8, 8);
       bg.destroy();
     }
+
+    if (!this.textures.exists("spark")) {
+      const sg = this.make.graphics({ x: 0, y: 0, add: false });
+      sg.fillStyle(0xffffff, 1);
+      sg.fillRect(2, 0, 2, 6);
+      sg.fillRect(0, 2, 6, 2);
+      sg.generateTexture("spark", 6, 6);
+      sg.destroy();
+    }
   }
 
   _spawnTank(x, y, texKey) {
@@ -725,6 +748,8 @@ class GameScene extends Phaser.Scene {
 
     bullet.destroy();
 
+    this._hitFX(tank.x, tank.y);
+
     if (which === "player") {
       const hp = this.registry.get("playerHP") - 1;
       this.registry.set("playerHP", hp);
@@ -744,6 +769,14 @@ class GameScene extends Phaser.Scene {
   _flashTank(tank) {
     tank.setAlpha(0.35);
     this.time.delayedCall(80, () => tank.setAlpha(1));
+  }
+
+  _hitFX(x, y) {
+    this.cameras.main.shake(90, 0.007);
+    if (this.sparks) {
+      this.sparks.setPosition(x, y);
+      this.sparks.explode(12, x, y);
+    }
   }
 
   _endRound(playerWon, message) {
