@@ -74,7 +74,11 @@ class UIScene extends Phaser.Scene {
     const pW = this.registry.get("playerWins") || 0;
     const aW = this.registry.get("aiWins") || 0;
     const toWin = this.registry.get("winsToWin") || 3;
-    this.ui.matchText.setText(`Match  You: ${pW}    AI: ${aW}   (First to ${toWin})`);
+    const roundNum = this.registry.get("roundNumber") || 0;
+    const maxRounds = this.registry.get("maxRounds") || (toWin * 2 - 1);
+    this.ui.matchText.setText(
+      `Match  You: ${pW}    AI: ${aW}   (First to ${toWin})   • Round ${roundNum}/${maxRounds}`
+    );
 
     // Boost UI
     const now = this.time.now;

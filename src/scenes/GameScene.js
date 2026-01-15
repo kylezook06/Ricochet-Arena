@@ -74,6 +74,9 @@ class GameScene extends Phaser.Scene {
     this.registry.set("winsToWin", 3);
     this.registry.set("playerWins", 0);
     this.registry.set("aiWins", 0);
+    this.registry.set("roundNumber", 0);
+    this.registry.set("maxRounds", 5);
+    this.registry.set("countdown", 0);
 
     // ---- Game state
     this.registry.set("roundActive", false);
@@ -84,6 +87,11 @@ class GameScene extends Phaser.Scene {
     this.registry.set("playerHP", 5);
     this.registry.set("aiHP", 5);
     this.registry.set("timeLeft", this.registry.get("roundSeconds"));
+
+    this.SPAWN = {
+      player: { x: this.ARENA.x + 140, y: this.ARENA.y + this.ARENA.h / 2, rot: 0 },
+      ai: { x: this.ARENA.x + this.ARENA.w - 140, y: this.ARENA.y + this.ARENA.h / 2, rot: Math.PI }
+    };
 
     // ---- Boost state (for UI)
     this.boostActiveUntil = 0;
@@ -111,6 +119,7 @@ class GameScene extends Phaser.Scene {
 
       shift: Phaser.Input.Keyboard.KeyCodes.SHIFT,
       space: Phaser.Input.Keyboard.KeyCodes.SPACE,
+      enter: Phaser.Input.Keyboard.KeyCodes.ENTER,
       r: Phaser.Input.Keyboard.KeyCodes.R
     });
 
@@ -193,7 +202,7 @@ class GameScene extends Phaser.Scene {
     this.add.text(
       this.ARENA.x,
       this.ARENA.y + this.ARENA.h + 18,
-      "W/S move • A/D turn • SHIFT boost • SPACE fire • ←/→ set time (menu) • P/ESC pause • R restart • F fullscreen",
+      "W/S move • A/D turn • SHIFT boost • SPACE fire • ENTER start/next • ←/→ set time (menu) • P/ESC pause • R restart • F fullscreen",
       { fontFamily: "Arial", fontSize: "14px", color: "#cfcfcf" }
     ).setAlpha(0.85);
 
@@ -225,7 +234,7 @@ class GameScene extends Phaser.Scene {
         this._cycleRoundOption(+1);
       }
 
-      if (Phaser.Input.Keyboard.JustDown(this.keys.space)) {
+      if (Phaser.Input.Keyboard.JustDown(this.keys.enter)) {
         this._startMatch();
       }
       return;
@@ -233,7 +242,7 @@ class GameScene extends Phaser.Scene {
 
     // ---- BETWEEN ROUNDS
     if (state === "betweenRounds") {
-      if (Phaser.Input.Keyboard.JustDown(this.keys.space)) {
+      if (Phaser.Input.Keyboard.JustDown(this.keys.enter)) {
         // Start next round, keep match wins
         this._startRound();
       }
@@ -279,7 +288,7 @@ class GameScene extends Phaser.Scene {
     );
     this.registry.set(
       "subMessage",
-      "Press SPACE to start • P/ESC pause • R restart • F fullscreen"
+      "Press ENTER to start • ←/→ time • P/ESC pause • R restart • F fullscreen"
     );
   }
 
@@ -299,6 +308,7 @@ class GameScene extends Phaser.Scene {
     this.registry.set("playerWins", 0);
     this.registry.set("aiWins", 0);
     this.registry.set("score", 0);
+    this.registry.set("roundNumber", 0);
     this._startRound();
   }
 
@@ -314,6 +324,12 @@ class GameScene extends Phaser.Scene {
     const secs = this.registry.get("roundSeconds") || this.ROUND_SECONDS;
     this.registry.set("timeLeft", secs);
 
+    const pW = this.registry.get("playerWins") || 0;
+    const aW = this.registry.get("aiWins") || 0;
+    const winsToWin = this.registry.get("winsToWin") || 3;
+    this.registry.set("maxRounds", winsToWin * 2 - 1);
+    this.registry.set("roundNumber", pW + aW + 1);
+
     // New round: clear bullets
     if (this.bullets) {
       this.bullets.children.iterate((b) => {
@@ -327,12 +343,8 @@ class GameScene extends Phaser.Scene {
     // New round: new obstacle layout (optional but nice)
     this._createObstacles();
 
-    // Reset tank motion (keep positions where they are; you can also respawn if desired)
-    this.player.body.setVelocity(0, 0);
-    this.ai.body.setVelocity(0, 0);
-
-    // Resume physics
-    this.physics.world.resume();
+    this._respawnTanks();
+    this._beginCountdown();
   }
 
   _pauseGame() {
@@ -357,6 +369,61 @@ class GameScene extends Phaser.Scene {
     this.registry.set("subMessage", "P/ESC pause • R restart");
 
     this.physics.world.resume();
+  }
+
+  _beginCountdown() {
+    this.registry.set("gameState", "countdown");
+    this.registry.set("roundActive", false);
+    this.registry.set("message", "GET READY");
+    this.registry.set("subMessage", "Round starts in 3...");
+    this.registry.set("countdown", 3);
+
+    this.physics.world.pause();
+
+    const steps = [3, 2, 1];
+    steps.forEach((n, i) => {
+      this.time.delayedCall(i * 400, () => {
+        this.registry.set("countdown", n);
+        this.registry.set("message", "ROUND STARTING");
+        this.registry.set("subMessage", `Starting in ${n}...`);
+      });
+    });
+
+    this.time.delayedCall(steps.length * 400, () => {
+      this.registry.set("countdown", 0);
+      this.registry.set("message", "");
+      this.registry.set("subMessage", "P/ESC pause • R restart");
+      this.registry.set("roundActive", true);
+      this.registry.set("gameState", "playing");
+      this.physics.world.resume();
+
+      this.lastPlayerShotAt = this.time.now;
+      this.lastAiShotAt = this.time.now;
+    });
+  }
+
+  _respawnTanks() {
+    const ps = this.SPAWN.player;
+    const as = this.SPAWN.ai;
+
+    this.player.body.setVelocity(0, 0);
+    this.ai.body.setVelocity(0, 0);
+
+    this.player.setPosition(ps.x, ps.y);
+    this.ai.setPosition(as.x, as.y);
+
+    this.player.setRotation(ps.rot);
+    this.ai.setRotation(as.rot);
+
+    this.player.body.reset(ps.x, ps.y);
+    this.ai.body.reset(as.x, as.y);
+
+    const now = this.time.now;
+    this.player.setData("invulnUntil", now + 450);
+    this.ai.setData("invulnUntil", now + 450);
+
+    this.player.setAlpha(1).setVisible(true).setDepth(10);
+    this.ai.setAlpha(1).setVisible(true).setDepth(10);
   }
 
   // -----------------------------
@@ -715,7 +782,7 @@ class GameScene extends Phaser.Scene {
 
       this.registry.set(
         "subMessage",
-        `Final: You ${pW} – AI ${aW} • ←/→ set time • SPACE new match • R restart`
+        `Final: You ${pW} – AI ${aW} • ←/→ set time • ENTER new match • R restart`
       );
       return;
     }
@@ -725,7 +792,7 @@ class GameScene extends Phaser.Scene {
     this.registry.set("message", message);
     this.registry.set(
       "subMessage",
-      `Match: You ${pW} – AI ${aW} (first to ${winsToWin}) • SPACE next round • R restart`
+      `Match: You ${pW} – AI ${aW} (first to ${winsToWin}) • ENTER next round • R restart`
     );
   }
 }
