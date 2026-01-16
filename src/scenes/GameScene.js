@@ -100,6 +100,11 @@ class GameScene extends Phaser.Scene {
     this.registry.set("boostReadyAt", 0);
     this.registry.set("boostCooldownMs", this.BOOST.cooldownMs);
 
+    // ---- WebAudio SFX (no external files)
+    this.audioCtx = null;
+    this.sfxEnabled = true;
+    this.lastRicochetAt = 0;
+
     this._refreshMenuText();
   }
 
@@ -164,6 +169,7 @@ class GameScene extends Phaser.Scene {
         b.velocity.x *= s;
         b.velocity.y *= s;
       }
+      this._sfxRicochet();
     });
 
     // Bullets hit tanks
@@ -249,6 +255,7 @@ class GameScene extends Phaser.Scene {
       }
 
       if (Phaser.Input.Keyboard.JustDown(this.keys.enter)) {
+        this._ensureAudio();
         this._startMatch();
       }
       return;
@@ -257,6 +264,7 @@ class GameScene extends Phaser.Scene {
     // ---- BETWEEN ROUNDS
     if (state === "betweenRounds") {
       if (Phaser.Input.Keyboard.JustDown(this.keys.enter)) {
+        this._ensureAudio();
         // Start next round, keep match wins
         this._startRound();
       }
@@ -400,6 +408,7 @@ class GameScene extends Phaser.Scene {
         this.registry.set("countdown", n);
         this.registry.set("message", "ROUND STARTING");
         this.registry.set("subMessage", `Starting in ${n}...`);
+        this._sfxCountdownTick(n);
       });
     });
 
@@ -413,6 +422,7 @@ class GameScene extends Phaser.Scene {
 
       this.lastPlayerShotAt = this.time.now;
       this.lastAiShotAt = this.time.now;
+      this._sfxGo();
     });
   }
 
@@ -538,6 +548,7 @@ class GameScene extends Phaser.Scene {
         body.velocity.x *= s;
         body.velocity.y *= s;
       }
+      this._sfxRicochet();
     });
   }
 
@@ -749,6 +760,7 @@ class GameScene extends Phaser.Scene {
     bullet.destroy();
 
     this._hitFX(tank.x, tank.y);
+    this._sfxHit();
 
     if (which === "player") {
       const hp = this.registry.get("playerHP") - 1;
@@ -777,6 +789,73 @@ class GameScene extends Phaser.Scene {
       this.sparks.setPosition(x, y);
       this.sparks.explode(12, x, y);
     }
+  }
+
+  // -----------------------------
+  // WebAudio SFX (no external files)
+  // -----------------------------
+  _ensureAudio() {
+    if (!this.sfxEnabled) return false;
+
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return false;
+
+    if (!this.audioCtx) this.audioCtx = new Ctx();
+
+    if (this.audioCtx.state === "suspended") {
+      this.audioCtx.resume().catch(() => {});
+    }
+    return true;
+  }
+
+  _beep({ freq = 440, durMs = 80, type = "square", vol = 0.06, slideTo = null }) {
+    if (!this._ensureAudio()) return;
+
+    const ctx = this.audioCtx;
+    const t0 = ctx.currentTime;
+
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, t0);
+
+    if (slideTo != null) {
+      osc.frequency.exponentialRampToValueAtTime(Math.max(1, slideTo), t0 + durMs / 1000);
+    }
+
+    gain.gain.setValueAtTime(0.0001, t0);
+    gain.gain.exponentialRampToValueAtTime(Math.max(0.0001, vol), t0 + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + durMs / 1000);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+
+    osc.start(t0);
+    osc.stop(t0 + durMs / 1000 + 0.02);
+  }
+
+  _sfxCountdownTick(n) {
+    const map = { 3: 520, 2: 620, 1: 760 };
+    this._beep({ freq: map[n] || 600, durMs: 70, type: "square", vol: 0.05 });
+  }
+
+  _sfxGo() {
+    this._beep({ freq: 880, slideTo: 1240, durMs: 90, type: "triangle", vol: 0.06 });
+    this.time.delayedCall(90, () => this._beep({ freq: 1240, durMs: 60, type: "triangle", vol: 0.05 }));
+  }
+
+  _sfxHit() {
+    this._beep({ freq: 220, slideTo: 90, durMs: 110, type: "sawtooth", vol: 0.07 });
+    this.time.delayedCall(30, () => this._beep({ freq: 1200, slideTo: 600, durMs: 55, type: "square", vol: 0.03 }));
+  }
+
+  _sfxRicochet() {
+    const now = this.time.now;
+    if (now - this.lastRicochetAt < 55) return;
+    this.lastRicochetAt = now;
+
+    this._beep({ freq: 980, slideTo: 720, durMs: 55, type: "triangle", vol: 0.03 });
   }
 
   _endRound(playerWon, message) {
