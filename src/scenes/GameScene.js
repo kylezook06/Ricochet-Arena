@@ -110,6 +110,16 @@ class GameScene extends Phaser.Scene {
     this.sfxEnabled = true;
     this.lastRicochetAt = 0;
 
+    // ---- Post-match + stats
+    this.registry.set("postMatch", false);
+    this.registry.set("lastMatchResult", "");
+    this.registry.set("summaryText", "");
+    this.registry.set("pShots", 0);
+    this.registry.set("pHits", 0);
+    this.registry.set("aiShots", 0);
+    this.registry.set("aiHits", 0);
+    this.registry.set("matchTimePlayed", 0);
+
     // ---- AI bank-shot state
     this.aiAimMode = "direct";
     this.aiAimExpireAt = 0;
@@ -131,6 +141,7 @@ class GameScene extends Phaser.Scene {
       right: Phaser.Input.Keyboard.KeyCodes.RIGHT,
       o: Phaser.Input.Keyboard.KeyCodes.O,
 
+      m: Phaser.Input.Keyboard.KeyCodes.M,
       p: Phaser.Input.Keyboard.KeyCodes.P,
       esc: Phaser.Input.Keyboard.KeyCodes.ESC,
 
@@ -270,6 +281,15 @@ class GameScene extends Phaser.Scene {
         this._toggleObstacleMode();
       }
 
+      if (
+        this.registry.get("postMatch") === true &&
+        this.registry.get("lastMatchResult") === "won" &&
+        Phaser.Input.Keyboard.JustDown(this.keys.m)
+      ) {
+        this._showSummaryScreen();
+        return;
+      }
+
       if (Phaser.Input.Keyboard.JustDown(this.keys.enter)) {
         this._ensureAudio();
         this._startMatch();
@@ -283,6 +303,28 @@ class GameScene extends Phaser.Scene {
         this._ensureAudio();
         // Start next round, keep match wins
         this._startRound();
+      }
+      return;
+    }
+
+    if (state === "summary") {
+      if (Phaser.Input.Keyboard.JustDown(this.keys.enter)) {
+        this._ensureAudio();
+        this._startMatch();
+      } else if (Phaser.Input.Keyboard.JustDown(this.keys.esc)) {
+        this.registry.set("gameState", "menu");
+        this.registry.set("roundActive", false);
+        this.physics.world.pause();
+
+        const pW = this.registry.get("playerWins") || 0;
+        const aW = this.registry.get("aiWins") || 0;
+        const won = this.registry.get("lastMatchResult") === "won";
+        const summaryLink = won ? " • M summary" : "";
+        this.registry.set("message", won ? "MATCH WON" : "MATCH LOST");
+        this.registry.set(
+          "subMessage",
+          `Final: You ${pW} – AI ${aW} • ←/→ set time • ENTER new match${summaryLink} • R restart`
+        );
       }
       return;
     }
@@ -331,6 +373,10 @@ class GameScene extends Phaser.Scene {
     );
   }
 
+  _calcHPForSeconds(secs) {
+    return Math.max(5, Math.round((secs / 30 - 1) * 5));
+  }
+
   _cycleRoundOption(dir) {
     const len = this.ROUND_OPTIONS.length;
     let idx = this.registry.get("roundOptIndex") || 0;
@@ -358,6 +404,14 @@ class GameScene extends Phaser.Scene {
     this.registry.set("aiWins", 0);
     this.registry.set("score", 0);
     this.registry.set("roundNumber", 0);
+    this.registry.set("postMatch", false);
+    this.registry.set("lastMatchResult", "");
+    this.registry.set("summaryText", "");
+    this.registry.set("pShots", 0);
+    this.registry.set("pHits", 0);
+    this.registry.set("aiShots", 0);
+    this.registry.set("aiHits", 0);
+    this.registry.set("matchTimePlayed", 0);
     this._startRound();
   }
 
@@ -367,10 +421,13 @@ class GameScene extends Phaser.Scene {
     this.registry.set("message", "");
     this.registry.set("subMessage", "P/ESC pause • R restart");
 
-    this.registry.set("playerHP", 5);
-    this.registry.set("aiHP", 5);
-
     const secs = this.registry.get("roundSeconds") || this.ROUND_SECONDS;
+    const hp = this._calcHPForSeconds(secs);
+
+    this.registry.set("playerHP", hp);
+    this.registry.set("aiHP", hp);
+    this.registry.set("playerHPMax", hp);
+    this.registry.set("aiHPMax", hp);
     this.registry.set("timeLeft", secs);
 
     const pW = this.registry.get("playerWins") || 0;
@@ -649,6 +706,46 @@ class GameScene extends Phaser.Scene {
     }
 
     return best;
+  }
+
+  _formatTime(secs) {
+    const s = Math.max(0, Math.floor(secs));
+    const mm = Math.floor(s / 60);
+    const ss = s % 60;
+    return `${mm}:${String(ss).padStart(2, "0")}`;
+  }
+
+  _buildSummaryText() {
+    const pShots = this.registry.get("pShots") || 0;
+    const pHits = this.registry.get("pHits") || 0;
+    const aShots = this.registry.get("aiShots") || 0;
+    const aHits = this.registry.get("aiHits") || 0;
+
+    const pAcc = pShots > 0 ? Math.round((pHits / pShots) * 100) : 0;
+    const aAcc = aShots > 0 ? Math.round((aHits / aShots) * 100) : 0;
+
+    const played = this.registry.get("matchTimePlayed") || 0;
+    const pW = this.registry.get("playerWins") || 0;
+    const aW = this.registry.get("aiWins") || 0;
+
+    return (
+      `MATCH SUMMARY\n` +
+      `Rounds: You ${pW} – AI ${aW}\n\n` +
+      `You:  Shots ${pShots}  • Hits ${pHits}  • Acc ${pAcc}%\n` +
+      `AI:   Shots ${aShots}  • Hits ${aHits}  • Acc ${aAcc}%\n\n` +
+      `Time played: ${this._formatTime(played)}\n`
+    );
+  }
+
+  _showSummaryScreen() {
+    this.registry.set("gameState", "summary");
+    this.registry.set("roundActive", false);
+
+    const summary = this._buildSummaryText();
+    this.registry.set("summaryText", summary);
+    this.registry.set("message", summary);
+    this.registry.set("subMessage", "ENTER new match • ESC back");
+    this.physics.world.pause();
   }
 
   _makeRandomBlocks(seed) {
@@ -1009,6 +1106,12 @@ class GameScene extends Phaser.Scene {
   }
 
   _fireBullet(shooter, owner, time) {
+    if (owner === "player") {
+      this.registry.set("pShots", (this.registry.get("pShots") || 0) + 1);
+    } else {
+      this.registry.set("aiShots", (this.registry.get("aiShots") || 0) + 1);
+    }
+
     const dir = new Phaser.Math.Vector2(1, 0).rotate(shooter.rotation);
     const spawnOffset = 28;
     const x = shooter.x + dir.x * spawnOffset;
@@ -1052,6 +1155,12 @@ class GameScene extends Phaser.Scene {
     tank.setData("invulnUntil", now + 120);
 
     bullet.destroy();
+    const owner = bullet.getData("owner");
+    if (owner === "player") {
+      this.registry.set("pHits", (this.registry.get("pHits") || 0) + 1);
+    } else if (owner === "ai") {
+      this.registry.set("aiHits", (this.registry.get("aiHits") || 0) + 1);
+    }
 
     this._hitFX(tank.x, tank.y);
     this._sfxHit();
@@ -1155,6 +1264,14 @@ class GameScene extends Phaser.Scene {
   _endRound(playerWon, message) {
     if (!this.registry.get("roundActive")) return;
 
+    const secs = this.registry.get("roundSeconds") || this.ROUND_SECONDS;
+    const timeLeft = this.registry.get("timeLeft") || 0;
+    const playedThisRound = Phaser.Math.Clamp(secs - timeLeft, 0, secs);
+    this.registry.set(
+      "matchTimePlayed",
+      (this.registry.get("matchTimePlayed") || 0) + playedThisRound
+    );
+
     this.registry.set("roundActive", false);
 
     // Stop physics immediately so nothing “keeps happening” between rounds
@@ -1179,17 +1296,18 @@ class GameScene extends Phaser.Scene {
     // Match end?
     if (pW >= winsToWin || aW >= winsToWin) {
       this.registry.set("gameState", "menu");
+      this.registry.set("postMatch", true);
 
-      if (pW >= winsToWin) {
-        this.registry.set("message", "MATCH WON");
-      } else {
-        this.registry.set("message", "MATCH LOST");
-      }
+      const won = pW >= winsToWin;
+      this.registry.set("lastMatchResult", won ? "won" : "lost");
+      this.registry.set("message", won ? "MATCH WON" : "MATCH LOST");
 
+      const summaryLink = won ? " • M summary" : "";
       this.registry.set(
         "subMessage",
-        `Final: You ${pW} – AI ${aW} • ←/→ set time • ENTER new match • R restart`
+        `Final: You ${pW} – AI ${aW} • ←/→ set time • ENTER new match${summaryLink} • R restart`
       );
+      this.registry.set("summaryText", this._buildSummaryText());
       return;
     }
 
