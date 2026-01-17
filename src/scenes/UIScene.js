@@ -6,6 +6,12 @@ class UIScene extends Phaser.Scene {
   create() {
     this.ui = {};
 
+    this.ui.dim = this.add
+      .rectangle(480, 270, 960, 540, 0x000000, 0.7)
+      .setOrigin(0.5)
+      .setAlpha(0)
+      .setDepth(0);
+
     this.ui.hpText = this.add.text(16, 14, "", {
       fontFamily: "Arial",
       fontSize: "18px",
@@ -43,14 +49,14 @@ class UIScene extends Phaser.Scene {
       fontSize: "34px",
       color: "#ffffff",
       align: "center"
-    }).setOrigin(0.5).setAlpha(0);
+    }).setOrigin(0.5).setAlpha(0).setDepth(2);
 
     this.ui.subMsg = this.add.text(480, 330, "Press R to Restart", {
       fontFamily: "Arial",
       fontSize: "18px",
       color: "#cfcfcf",
       align: "center"
-    }).setOrigin(0.5).setAlpha(0);
+    }).setOrigin(0.5).setAlpha(0).setDepth(2);
 
     // Update UI frequently
     this.time.addEvent({
@@ -116,14 +122,18 @@ class UIScene extends Phaser.Scene {
     // Center overlay messages
     const active = this.registry.get("roundActive");
     const msg = this.registry.get("message") || "";
+    const state = this.registry.get("gameState") || "";
+    const overlayUp = (!active && !!msg) || state === "menu" || state === "betweenRounds" || state === "paused" || state === "summary";
 
-    if (!active && msg) {
+    if (overlayUp && msg) {
+      this.ui.dim.setAlpha(1);
       this.ui.centerMsg.setText(msg);
       const sub = this.registry.get("subMessage") || "Press R to Restart";
       this.ui.subMsg.setText(sub);
       this.ui.centerMsg.setAlpha(1);
       this.ui.subMsg.setAlpha(1);
     } else {
+      this.ui.dim.setAlpha(0);
       this.ui.centerMsg.setAlpha(0);
       this.ui.subMsg.setAlpha(0);
     }

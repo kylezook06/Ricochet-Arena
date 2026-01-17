@@ -27,6 +27,19 @@ class GameScene extends Phaser.Scene {
       cooldownMs: 260
     };
 
+    this.WEAPONS = {
+      normal: { key: "normal", speed: this.BULLET.speed, lifeMs: this.BULLET.lifeMs, dmg: 1, count: 1, spread: 0 },
+      heavy: { key: "heavy", speed: 260, lifeMs: 2600, dmg: 2, count: 1, spread: 0 },
+      scatter: { key: "scatter", speed: 420, lifeMs: 900, dmg: 1, count: 3, spread: 0.15 },
+      long: { key: "long", speed: 500, lifeMs: 4200, dmg: 1, count: 1, spread: 0 }
+    };
+
+    this.PICKUP = {
+      onScreenMs: 10000,
+      gapMinMs: 10000,
+      gapMaxMs: 15000
+    };
+
     this.AI = {
       fireCooldownMs: 420,
       moveBias: 0.85,
@@ -119,6 +132,10 @@ class GameScene extends Phaser.Scene {
     this.registry.set("aiShots", 0);
     this.registry.set("aiHits", 0);
     this.registry.set("matchTimePlayed", 0);
+    this.registry.set("playerWeapon", this.registry.get("playerWeapon") || "normal");
+    this.registry.set("aiWeapon", this.registry.get("aiWeapon") || "normal");
+    this.nextPickupAt = 0;
+    this.activePickup = null;
 
     // ---- AI bank-shot state
     this.aiAimMode = "direct";
@@ -176,6 +193,19 @@ class GameScene extends Phaser.Scene {
     // --- Obstacles
     this._createObstacles();
 
+    // --- Weapon pickups
+    this.pickups = this.physics.add.staticGroup();
+
+    this.physics.add.overlap(this.player, this.pickups, (tank, pickup) => {
+      if (!this.registry.get("roundActive")) return;
+      this._collectPickup("player", pickup);
+    });
+
+    this.physics.add.overlap(this.ai, this.pickups, (tank, pickup) => {
+      if (!this.registry.get("roundActive")) return;
+      this._collectPickup("ai", pickup);
+    });
+
     // --- Collisions
     this.physics.add.collider(this.player, this.walls);
     this.physics.add.collider(this.ai, this.walls);
@@ -186,7 +216,7 @@ class GameScene extends Phaser.Scene {
       if (!b) return;
 
       const sp = Math.sqrt(b.velocity.x * b.velocity.x + b.velocity.y * b.velocity.y);
-      const max = this.BULLET.speed * 1.05;
+      const max = (bullet.getData("speed") || this.BULLET.speed) * 1.05;
       if (sp > max) {
         const s = max / sp;
         b.velocity.x *= s;
@@ -253,6 +283,7 @@ class GameScene extends Phaser.Scene {
 
     // Freeze world until player starts
     this.physics.world.pause();
+    this._scheduleNextPickup();
   }
 
   update(time, delta) {
@@ -349,6 +380,7 @@ class GameScene extends Phaser.Scene {
     this._updatePlayer(dt, time);
     this._updateAI(dt, time);
     this._cleanupBullets(time);
+    this._updatePickupLifecycle();
     this._updateControlsTicker(dt);
   }
 
@@ -414,6 +446,95 @@ class GameScene extends Phaser.Scene {
     }
   }
 
+  _scheduleNextPickup() {
+    this.nextPickupAt = this.time.now + Phaser.Math.Between(this.PICKUP.gapMinMs, this.PICKUP.gapMaxMs);
+  }
+
+  _spawnPickup() {
+    if (this.activePickup && this.activePickup.active) return;
+
+    const types = ["heavy", "scatter", "long"];
+    const type = Phaser.Utils.Array.GetRandom(types);
+    const pos = this._findPickupSpawnPoint();
+    if (!pos) {
+      this._scheduleNextPickup();
+      return;
+    }
+
+    const tex = `pickup_${type}`;
+    const pickup = this.pickups.create(pos.x, pos.y, tex);
+    pickup.setData("type", type);
+    pickup.setData("expiresAt", this.time.now + this.PICKUP.onScreenMs);
+    pickup.setVisible(true);
+
+    this.tweens.add({
+      targets: pickup,
+      scale: 1.08,
+      duration: 300,
+      yoyo: true,
+      repeat: -1
+    });
+
+    this.activePickup = pickup;
+  }
+
+  _collectPickup(who, pickup) {
+    if (!pickup || !pickup.active) return;
+
+    const type = pickup.getData("type") || "normal";
+    if (who === "player") {
+      this.registry.set("playerWeapon", type);
+    } else {
+      this.registry.set("aiWeapon", type);
+    }
+
+    pickup.destroy();
+    this.activePickup = null;
+    this._scheduleNextPickup();
+  }
+
+  _updatePickupLifecycle() {
+    if (this.activePickup && this.activePickup.active) {
+      const exp = this.activePickup.getData("expiresAt") || 0;
+      if (this.time.now >= exp) {
+        this.activePickup.destroy();
+        this.activePickup = null;
+        this._scheduleNextPickup();
+      }
+      return;
+    }
+
+    if (this.time.now >= (this.nextPickupAt || 0)) {
+      this._spawnPickup();
+    }
+  }
+
+  _findPickupSpawnPoint() {
+    const pad = 30;
+    const tries = 40;
+
+    const left = this.ARENA.x + pad;
+    const right = this.ARENA.x + this.ARENA.w - pad;
+    const top = this.ARENA.y + pad;
+    const bottom = this.ARENA.y + this.ARENA.h - pad;
+
+    const ps = this.SPAWN.player;
+    const as = this.SPAWN.ai;
+
+    for (let i = 0; i < tries; i++) {
+      const x = Phaser.Math.Between(left, right);
+      const y = Phaser.Math.Between(top, bottom);
+
+      if (Phaser.Math.Distance.Between(x, y, ps.x, ps.y) < 90) continue;
+      if (Phaser.Math.Distance.Between(x, y, as.x, as.y) < 90) continue;
+      if (this._isPointBlocked(this.player, x, y)) continue;
+
+      return { x, y };
+    }
+
+    return null;
+  }
+
   _cycleRoundOption(dir) {
     const len = this.ROUND_OPTIONS.length;
     let idx = this.registry.get("roundOptIndex") || 0;
@@ -449,6 +570,8 @@ class GameScene extends Phaser.Scene {
     this.registry.set("aiShots", 0);
     this.registry.set("aiHits", 0);
     this.registry.set("matchTimePlayed", 0);
+    this.registry.set("playerWeapon", "normal");
+    this.registry.set("aiWeapon", "normal");
     this._startRound();
   }
 
@@ -465,6 +588,8 @@ class GameScene extends Phaser.Scene {
     this.registry.set("aiHP", hp);
     this.registry.set("playerHPMax", hp);
     this.registry.set("aiHPMax", hp);
+    this.registry.set("playerWeapon", "normal");
+    this.registry.set("aiWeapon", "normal");
     this.registry.set("timeLeft", secs);
 
     const pW = this.registry.get("playerWins") || 0;
@@ -485,6 +610,11 @@ class GameScene extends Phaser.Scene {
 
     // New round: new obstacle layout (optional but nice)
     this._createObstacles();
+    if (this.pickups) {
+      this.pickups.clear(true, true);
+    }
+    this.activePickup = null;
+    this._scheduleNextPickup();
 
     this._respawnTanks();
     this._beginCountdown();
@@ -936,7 +1066,7 @@ class GameScene extends Phaser.Scene {
       if (!body) return;
 
       const sp = Math.sqrt(body.velocity.x * body.velocity.x + body.velocity.y * body.velocity.y);
-      const max = this.BULLET.speed * 1.05;
+      const max = (bullet.getData("speed") || this.BULLET.speed) * 1.05;
       if (sp > max) {
         const s = max / sp;
         body.velocity.x *= s;
@@ -984,6 +1114,39 @@ class GameScene extends Phaser.Scene {
       sg.fillRect(0, 2, 6, 2);
       sg.generateTexture("spark", 6, 6);
       sg.destroy();
+    }
+
+    if (!this.textures.exists("pickup_heavy")) {
+      const g = this.make.graphics({ x: 0, y: 0, add: false });
+      g.fillStyle(0xffd166, 1);
+      g.fillCircle(10, 10, 10);
+      g.fillStyle(0x1b1b1b, 1);
+      g.fillRect(6, 9, 8, 2);
+      g.generateTexture("pickup_heavy", 20, 20);
+      g.destroy();
+    }
+
+    if (!this.textures.exists("pickup_scatter")) {
+      const g = this.make.graphics({ x: 0, y: 0, add: false });
+      g.fillStyle(0x8ecae6, 1);
+      g.fillCircle(10, 10, 10);
+      g.fillStyle(0x1b1b1b, 1);
+      g.fillCircle(7, 10, 2);
+      g.fillCircle(10, 10, 2);
+      g.fillCircle(13, 10, 2);
+      g.generateTexture("pickup_scatter", 20, 20);
+      g.destroy();
+    }
+
+    if (!this.textures.exists("pickup_long")) {
+      const g = this.make.graphics({ x: 0, y: 0, add: false });
+      g.fillStyle(0xff6b6b, 1);
+      g.fillCircle(10, 10, 10);
+      g.fillStyle(0x1b1b1b, 1);
+      g.fillRect(5, 9, 10, 2);
+      g.fillRect(13, 7, 2, 6);
+      g.generateTexture("pickup_long", 20, 20);
+      g.destroy();
     }
   }
 
@@ -1168,9 +1331,14 @@ class GameScene extends Phaser.Scene {
   }
 
   _fireBullet(shooter, owner, time) {
-    const dir = new Phaser.Math.Vector2(1, 0).rotate(shooter.rotation);
-    const spawn = this._getClearBulletSpawn(shooter, dir);
+    const dirBase = new Phaser.Math.Vector2(1, 0).rotate(shooter.rotation);
+    const spawn = this._getClearBulletSpawn(shooter, dirBase);
     if (!spawn) return;
+
+    const weaponKey = (owner === "player")
+      ? (this.registry.get("playerWeapon") || "normal")
+      : (this.registry.get("aiWeapon") || "normal");
+    const wpn = this.WEAPONS[weaponKey] || this.WEAPONS.normal;
 
     if (owner === "player") {
       this.registry.set("pShots", (this.registry.get("pShots") || 0) + 1);
@@ -1178,21 +1346,30 @@ class GameScene extends Phaser.Scene {
       this.registry.set("aiShots", (this.registry.get("aiShots") || 0) + 1);
     }
 
-    const x = spawn.x;
-    const y = spawn.y;
+    const count = wpn.count || 1;
+    const spread = wpn.spread || 0;
 
-    const bullet = this.bullets.create(x, y, "bullet");
-    if (!bullet) return;
+    for (let i = 0; i < count; i++) {
+      const t = (count === 1) ? 0 : (i - (count - 1) / 2);
+      const ang = shooter.rotation + t * spread;
+      const dir = new Phaser.Math.Vector2(1, 0).rotate(ang);
 
-    bullet.setDepth(5);
-    bullet.setData("owner", owner);
-    bullet.setData("bornAt", time);
+      const bullet = this.bullets.create(spawn.x, spawn.y, "bullet");
+      if (!bullet) continue;
 
-    bullet.body.setAllowGravity(false);
-    bullet.body.setCircle(4);
-    bullet.setBounce(1, 1);
+      bullet.setDepth(5);
+      bullet.setData("owner", owner);
+      bullet.setData("bornAt", time);
+      bullet.setData("lifeMs", wpn.lifeMs);
+      bullet.setData("damage", wpn.dmg);
+      bullet.setData("speed", wpn.speed);
 
-    bullet.body.setVelocity(dir.x * this.BULLET.speed, dir.y * this.BULLET.speed);
+      bullet.body.setAllowGravity(false);
+      bullet.body.setCircle(4);
+      bullet.setBounce(1, 1);
+
+      bullet.body.setVelocity(dir.x * wpn.speed, dir.y * wpn.speed);
+    }
   }
 
   _cleanupBullets(time) {
@@ -1201,7 +1378,8 @@ class GameScene extends Phaser.Scene {
       const bornAt = b.getData("bornAt");
       if (bornAt == null) return;
       const age = time - bornAt;
-      if (age > this.BULLET.lifeMs) b.destroy();
+      const life = b.getData("lifeMs") || this.BULLET.lifeMs;
+      if (age > life) b.destroy();
     });
   }
 
@@ -1230,13 +1408,14 @@ class GameScene extends Phaser.Scene {
     this._hitFX(tank.x, tank.y);
     this._sfxHit();
 
+    const dmg = bullet.getData("damage") || 1;
     if (which === "player") {
-      const hp = this.registry.get("playerHP") - 1;
+      const hp = this.registry.get("playerHP") - dmg;
       this.registry.set("playerHP", hp);
       this._flashTank(tank);
       if (hp <= 0) this._endRound(false, "DESTROYED — Round Lost");
     } else {
-      const hp = this.registry.get("aiHP") - 1;
+      const hp = this.registry.get("aiHP") - dmg;
       this.registry.set("aiHP", hp);
       this._flashTank(tank);
 
