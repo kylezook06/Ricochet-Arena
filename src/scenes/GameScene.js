@@ -31,7 +31,11 @@ class GameScene extends Phaser.Scene {
       fireCooldownMs: 420,
       moveBias: 0.85,
       wobble: 0.65,
-      retreatDist: 140
+      retreatDist: 140,
+      bankChance: 0.35,
+      bankThinkMs: 300,
+      bankAimMs: 900,
+      bankFacingFire: 0.30
     };
 
     // Obstacle layouts (normalized positions inside arena)
@@ -106,6 +110,12 @@ class GameScene extends Phaser.Scene {
     this.audioCtx = null;
     this.sfxEnabled = true;
     this.lastRicochetAt = 0;
+
+    // ---- AI bank-shot state
+    this.aiAimMode = "direct";
+    this.aiAimExpireAt = 0;
+    this.aiNextBankThinkAt = 0;
+    this.aiBankPlan = null;
 
     this._refreshMenuText();
   }
@@ -513,6 +523,136 @@ class GameScene extends Phaser.Scene {
     );
   }
 
+  _getObstacleAABBs(pad = 6) {
+    const out = [];
+    if (!this.obstacles) return out;
+
+    const kids = this.obstacles.getChildren ? this.obstacles.getChildren() : [];
+    for (const o of kids) {
+      if (!o || !o.body) continue;
+      const b = o.body;
+      out.push({
+        xmin: b.x - pad,
+        ymin: b.y - pad,
+        xmax: b.x + b.width + pad,
+        ymax: b.y + b.height + pad
+      });
+    }
+    return out;
+  }
+
+  _segIntersectsAABB(x0, y0, x1, y1, aabb) {
+    let t0 = 0;
+    let t1 = 1;
+    const dx = x1 - x0;
+    const dy = y1 - y0;
+
+    const clip = (p, q) => {
+      if (p === 0) return q >= 0;
+      const r = q / p;
+      if (p < 0) {
+        if (r > t1) return false;
+        if (r > t0) t0 = r;
+      } else {
+        if (r < t0) return false;
+        if (r < t1) t1 = r;
+      }
+      return true;
+    };
+
+    if (
+      clip(-dx, x0 - aabb.xmin) &&
+      clip(dx, aabb.xmax - x0) &&
+      clip(-dy, y0 - aabb.ymin) &&
+      clip(dy, aabb.ymax - y0)
+    ) {
+      return t1 >= t0;
+    }
+    return false;
+  }
+
+  _hasLineOfSight(x0, y0, x1, y1, pad = 6) {
+    const aabbs = this._getObstacleAABBs(pad);
+    for (const a of aabbs) {
+      if (this._segIntersectsAABB(x0, y0, x1, y1, a)) return false;
+    }
+    return true;
+  }
+
+  _chooseBankPlan(ai, player) {
+    const leftX = this.ARENA.x;
+    const rightX = this.ARENA.x + this.ARENA.w;
+    const topY = this.ARENA.y;
+    const botY = this.ARENA.y + this.ARENA.h;
+
+    const margin = 18;
+    const px = player.x;
+    const py = player.y;
+    const ax = ai.x;
+    const ay = ai.y;
+
+    const walls = [
+      { id: "left", kind: "v", v: leftX },
+      { id: "right", kind: "v", v: rightX },
+      { id: "top", kind: "h", v: topY },
+      { id: "bottom", kind: "h", v: botY }
+    ];
+
+    let best = null;
+
+    for (const w of walls) {
+      let rx = px;
+      let ry = py;
+      if (w.kind === "v") rx = 2 * w.v - px;
+      else ry = 2 * w.v - py;
+
+      const dx = rx - ax;
+      const dy = ry - ay;
+
+      let t;
+      let bx;
+      let by;
+
+      if (w.kind === "v") {
+        if (dx === 0) continue;
+        t = (w.v - ax) / dx;
+        if (t <= 0 || t >= 1) continue;
+        by = ay + t * dy;
+        if (by < topY + margin || by > botY - margin) continue;
+        bx = w.v;
+      } else {
+        if (dy === 0) continue;
+        t = (w.v - ay) / dy;
+        if (t <= 0 || t >= 1) continue;
+        bx = ax + t * dx;
+        if (bx < leftX + margin || bx > rightX - margin) continue;
+        by = w.v;
+      }
+
+      const leg1OK = this._hasLineOfSight(ax, ay, bx, by, 8);
+      const leg2OK = this._hasLineOfSight(bx, by, px, py, 8);
+      if (!leg1OK || !leg2OK) continue;
+
+      const aimAngle = Math.atan2(ry - ay, rx - ax);
+      const d1 = Phaser.Math.Distance.Between(ax, ay, bx, by);
+      const d2 = Phaser.Math.Distance.Between(bx, by, px, py);
+      const facingPenalty = Math.abs(Phaser.Math.Angle.Wrap(aimAngle - ai.rotation)) * 140;
+      const score = d1 + d2 + facingPenalty;
+
+      if (!best || score < best.score) {
+        best = {
+          score,
+          wall: w.id,
+          bounce: { x: bx, y: by },
+          aim: { x: rx, y: ry },
+          aimAngle
+        };
+      }
+    }
+
+    return best;
+  }
+
   _makeRandomBlocks(seed) {
     const rng = new Phaser.Math.RandomDataGenerator([String(seed || 1)]);
 
@@ -787,14 +927,41 @@ class GameScene extends Phaser.Scene {
     const p = this.player;
     const a = this.ai;
 
-    const dx = p.x - a.x;
-    const dy = p.y - a.y;
-    const dist = Math.sqrt(dx * dx + dy * dy);
+    const dxP = p.x - a.x;
+    const dyP = p.y - a.y;
+    const dist = Math.sqrt(dxP * dxP + dyP * dyP);
 
-    const desiredAngle = Math.atan2(dy, dx);
+    const directAngle = Math.atan2(dyP, dxP);
+    const directLOS = this._hasLineOfSight(a.x, a.y, p.x, p.y, 8);
+    const facingToPlayer = Math.abs(Phaser.Math.Angle.Wrap(directAngle - a.rotation));
+    const directGood = directLOS && facingToPlayer < 0.45;
+
+    if (time >= this.aiAimExpireAt) {
+      this.aiAimMode = "direct";
+      this.aiBankPlan = null;
+    }
+
+    if (!directGood && time >= this.aiNextBankThinkAt) {
+      this.aiNextBankThinkAt = time + this.AI.bankThinkMs;
+
+      if (Math.random() < this.AI.bankChance) {
+        const plan = this._chooseBankPlan(a, p);
+        if (plan) {
+          this.aiAimMode = "bank";
+          this.aiBankPlan = plan;
+          this.aiAimExpireAt = time + this.AI.bankAimMs;
+        }
+      }
+    }
+
+    let desiredAngle = directAngle;
+    if (this.aiAimMode === "bank" && this.aiBankPlan) {
+      desiredAngle = this.aiBankPlan.aimAngle;
+    }
+
     let diff = Phaser.Math.Angle.Wrap(desiredAngle - a.rotation);
-
-    diff += (Math.random() - 0.5) * this.AI.wobble * dt;
+    const wobble = (this.aiAimMode === "bank") ? (this.AI.wobble * 0.25) : this.AI.wobble;
+    diff += (Math.random() - 0.5) * wobble * dt;
 
     const maxTurn = this.TANK.turnSpeed * 0.9 * dt;
     diff = Phaser.Math.Clamp(diff, -maxTurn, maxTurn);
@@ -818,8 +985,15 @@ class GameScene extends Phaser.Scene {
     }
 
     const facing = Math.abs(Phaser.Math.Angle.Wrap(desiredAngle - a.rotation));
-    if (facing < 0.35) {
-      if (time - this.lastAiShotAt >= this.AI.fireCooldownMs) {
+    const canFire = (time - this.lastAiShotAt) >= this.AI.fireCooldownMs;
+
+    if (this.aiAimMode === "direct") {
+      if (directLOS && facing < 0.35 && canFire) {
+        this.lastAiShotAt = time;
+        this._fireBullet(a, "ai", time);
+      }
+    } else {
+      if (facing < this.AI.bankFacingFire && canFire) {
         this.lastAiShotAt = time;
         this._fireBullet(a, "ai", time);
       }
