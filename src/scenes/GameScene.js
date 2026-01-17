@@ -141,6 +141,7 @@ class GameScene extends Phaser.Scene {
     this.aiCoverUntil = 0;
     this.aiCoverTarget = null;
     this.aiPickupPlan = null;
+    this._slowMoActive = false;
 
     // ---- AI bank-shot state
     this.aiAimMode = "direct";
@@ -259,7 +260,7 @@ class GameScene extends Phaser.Scene {
         if (!this.registry.get("roundActive")) return;
         const t = Math.max(0, this.registry.get("timeLeft") - 1);
         this.registry.set("timeLeft", t);
-        if (t <= 0) this._endRound(false, "TIME UP — Round Lost");
+        if (t <= 0) this._endRound(false, "TIME UP — Round Lost", false);
       }
     });
 
@@ -1570,7 +1571,7 @@ class GameScene extends Phaser.Scene {
       const hp = this.registry.get("playerHP") - dmg;
       this.registry.set("playerHP", hp);
       this._flashTank(tank);
-      if (hp <= 0) this._endRound(false, "DESTROYED — Round Lost");
+      if (hp <= 0) this._endRound(false, "DESTROYED — Round Lost", true);
     } else {
       const hp = this.registry.get("aiHP") - dmg;
       this.registry.set("aiHP", hp);
@@ -1580,7 +1581,7 @@ class GameScene extends Phaser.Scene {
 
       this._noteAIHitForCover(this.time.now);
 
-      if (hp <= 0) this._endRound(true, "AI DESTROYED — Round Won");
+      if (hp <= 0) this._endRound(true, "AI DESTROYED — Round Won", true);
     }
   }
 
@@ -1664,7 +1665,32 @@ class GameScene extends Phaser.Scene {
     this._beep({ freq: 980, slideTo: 720, durMs: 55, type: "triangle", vol: 0.03 });
   }
 
-  _endRound(playerWon, message) {
+  _setGlobalTimeScale(scale) {
+    const s = Phaser.Math.Clamp(scale, 0.05, 1);
+    this.time.timeScale = s;
+    if (this.physics && this.physics.world) {
+      this.physics.world.timeScale = s;
+    }
+    if (this.tweens) {
+      this.tweens.timeScale = s;
+    }
+    if (this.anims) {
+      this.anims.globalTimeScale = s;
+    }
+  }
+
+  _slowMo(ms = 150, scale = 0.18, onDone = null) {
+    if (this._slowMoActive) return;
+    this._slowMoActive = true;
+    this._setGlobalTimeScale(scale);
+    window.setTimeout(() => {
+      this._setGlobalTimeScale(1);
+      this._slowMoActive = false;
+      if (typeof onDone === "function") onDone();
+    }, ms);
+  }
+
+  _endRound(playerWon, message, isKill = false) {
     if (!this.registry.get("roundActive")) return;
 
     const secs = this.registry.get("roundSeconds") || this.ROUND_SECONDS;
@@ -1676,11 +1702,6 @@ class GameScene extends Phaser.Scene {
     );
 
     this.registry.set("roundActive", false);
-
-    // Stop physics immediately so nothing “keeps happening” between rounds
-    this.player.body.setVelocity(0, 0);
-    this.ai.body.setVelocity(0, 0);
-    this.physics.world.pause();
 
     // Update match wins
     const winsToWin = this.registry.get("winsToWin") || 3;
@@ -1695,31 +1716,45 @@ class GameScene extends Phaser.Scene {
 
     const pW = this.registry.get("playerWins") || 0;
     const aW = this.registry.get("aiWins") || 0;
+    const matchEnded = (pW >= winsToWin || aW >= winsToWin);
 
-    // Match end?
-    if (pW >= winsToWin || aW >= winsToWin) {
-      this.registry.set("gameState", "menu");
-      this.registry.set("postMatch", true);
+    const finalize = () => {
+      // Stop physics immediately so nothing “keeps happening” between rounds
+      this.player.body.setVelocity(0, 0);
+      this.ai.body.setVelocity(0, 0);
+      this.physics.world.pause();
 
-      const won = pW >= winsToWin;
-      this.registry.set("lastMatchResult", won ? "won" : "lost");
-      this.registry.set("message", won ? "MATCH WON" : "MATCH LOST");
+      // Match end?
+      if (matchEnded) {
+        this.registry.set("gameState", "menu");
+        this.registry.set("postMatch", true);
 
-      const summaryLink = won ? " • M summary" : "";
+        const won = pW >= winsToWin;
+        this.registry.set("lastMatchResult", won ? "won" : "lost");
+        this.registry.set("message", won ? "MATCH WON" : "MATCH LOST");
+
+        const summaryLink = won ? " • M summary" : "";
+        this.registry.set(
+          "subMessage",
+          `Final: You ${pW} – AI ${aW} • ←/→ set time • ENTER new match${summaryLink} • R restart`
+        );
+        this.registry.set("summaryText", this._buildSummaryText());
+        return;
+      }
+
+      // Otherwise: between rounds
+      this.registry.set("gameState", "betweenRounds");
+      this.registry.set("message", message);
       this.registry.set(
         "subMessage",
-        `Final: You ${pW} – AI ${aW} • ←/→ set time • ENTER new match${summaryLink} • R restart`
+        `Match: You ${pW} – AI ${aW} (first to ${winsToWin}) • ENTER next round • R restart`
       );
-      this.registry.set("summaryText", this._buildSummaryText());
-      return;
-    }
+    };
 
-    // Otherwise: between rounds
-    this.registry.set("gameState", "betweenRounds");
-    this.registry.set("message", message);
-    this.registry.set(
-      "subMessage",
-      `Match: You ${pW} – AI ${aW} (first to ${winsToWin}) • ENTER next round • R restart`
-    );
+    if (matchEnded && isKill) {
+      this._slowMo(150, 0.18, finalize);
+    } else {
+      finalize();
+    }
   }
 }
