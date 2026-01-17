@@ -136,6 +136,11 @@ class GameScene extends Phaser.Scene {
     this.registry.set("aiWeapon", this.registry.get("aiWeapon") || "normal");
     this.nextPickupAt = 0;
     this.activePickup = null;
+    this.aiLastHitAt = 0;
+    this.aiHitStreak = 0;
+    this.aiCoverUntil = 0;
+    this.aiCoverTarget = null;
+    this.aiPickupPlan = null;
 
     // ---- AI bank-shot state
     this.aiAimMode = "direct";
@@ -189,6 +194,7 @@ class GameScene extends Phaser.Scene {
 
     // --- Bullets
     this.bullets = this.physics.add.group();
+    this.trailGroup = this.add.group();
 
     // --- Obstacles
     this._createObstacles();
@@ -380,6 +386,7 @@ class GameScene extends Phaser.Scene {
     this._updatePlayer(dt, time);
     this._updateAI(dt, time);
     this._cleanupBullets(time);
+    this._updateBulletTrails(time);
     this._updatePickupLifecycle();
     this._updateControlsTicker(dt);
   }
@@ -446,6 +453,85 @@ class GameScene extends Phaser.Scene {
     }
   }
 
+  _noteAIHitForCover(now) {
+    const windowMs = 1100;
+    if (now - (this.aiLastHitAt || 0) <= windowMs) {
+      this.aiHitStreak = (this.aiHitStreak || 0) + 1;
+    } else {
+      this.aiHitStreak = 1;
+    }
+    this.aiLastHitAt = now;
+
+    const v = (this.ai && this.ai.body) ? this.ai.body.velocity : null;
+    const moving = v ? (v.x * v.x + v.y * v.y) > (35 * 35) : false;
+    if (this.aiHitStreak >= 3 && !moving) {
+      this._triggerAICover(now);
+      this.aiHitStreak = 0;
+    }
+  }
+
+  _triggerAICover(now) {
+    const target = this._findCoverPoint();
+    if (!target) return;
+    this.aiCoverTarget = target;
+    this.aiCoverUntil = now + 1600;
+  }
+
+  _findCoverPoint() {
+    if (!this.ai || !this.player) return null;
+    const aabbs = this._getObstacleAABBs ? this._getObstacleAABBs(8) : [];
+    if (!aabbs.length) return null;
+
+    const ax = this.ai.x;
+    const ay = this.ai.y;
+    const px = this.player.x;
+    const py = this.player.y;
+
+    const clamp = (x, y) => ({
+      x: Phaser.Math.Clamp(x, this.ARENA.x + 18, this.ARENA.x + this.ARENA.w - 18),
+      y: Phaser.Math.Clamp(y, this.ARENA.y + 18, this.ARENA.y + this.ARENA.h - 18)
+    });
+
+    let best = null;
+
+    for (const b of aabbs) {
+      const cx = (b.xmin + b.xmax) * 0.5;
+      const cy = (b.ymin + b.ymax) * 0.5;
+
+      const vx = cx - px;
+      const vy = cy - py;
+      const len = Math.hypot(vx, vy) || 1;
+
+      const pad = 28;
+      const half = Math.max(b.xmax - b.xmin, b.ymax - b.ymin) * 0.5;
+      const tx = cx + (vx / len) * (half + pad);
+      const ty = cy + (vy / len) * (half + pad);
+
+      const t = clamp(tx, ty);
+      if (this._hasLineOfSight && this._hasLineOfSight(px, py, t.x, t.y, 6)) continue;
+
+      const d = Phaser.Math.Distance.Between(ax, ay, t.x, t.y);
+      if (!best || d < best.d) best = { d, x: t.x, y: t.y };
+    }
+
+    return best ? { x: best.x, y: best.y } : null;
+  }
+
+  _aiMoveTowardPoint(target, speed01 = 1) {
+    if (!this.ai || !this.ai.body || !target) return;
+    const dx = target.x - this.ai.x;
+    const dy = target.y - this.ai.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist < 16) {
+      this.ai.body.velocity.scale(this.TANK.friction);
+      return;
+    }
+    const ang = Math.atan2(dy, dx);
+    this.ai.rotation = Phaser.Math.Angle.RotateTo(this.ai.rotation, ang, 0.05);
+    const speed = this.TANK.maxSpeed * 0.6 * speed01;
+    this.physics.velocityFromRotation(this.ai.rotation, speed, this.ai.body.velocity);
+  }
+
   _scheduleNextPickup() {
     this.nextPickupAt = this.time.now + Phaser.Math.Between(this.PICKUP.gapMinMs, this.PICKUP.gapMaxMs);
   }
@@ -465,6 +551,7 @@ class GameScene extends Phaser.Scene {
     const pickup = this.pickups.create(pos.x, pos.y, tex);
     pickup.setData("type", type);
     pickup.setData("expiresAt", this.time.now + this.PICKUP.onScreenMs);
+    pickup.setData("spawnId", `${type}-${this.time.now}`);
     pickup.setVisible(true);
 
     this.tweens.add({
@@ -1148,6 +1235,14 @@ class GameScene extends Phaser.Scene {
       g.generateTexture("pickup_long", 20, 20);
       g.destroy();
     }
+
+    if (!this.textures.exists("trailDot")) {
+      const g = this.make.graphics({ x: 0, y: 0, add: false });
+      g.fillStyle(0xffffff, 1);
+      g.fillCircle(3, 3, 3);
+      g.generateTexture("trailDot", 6, 6);
+      g.destroy();
+    }
   }
 
   _spawnTank(x, y, texKey) {
@@ -1221,6 +1316,30 @@ class GameScene extends Phaser.Scene {
   _updateAI(dt, time) {
     const p = this.player;
     const a = this.ai;
+
+    if (this.aiCoverUntil && time < this.aiCoverUntil && this.aiCoverTarget) {
+      this._aiMoveTowardPoint(this.aiCoverTarget, 0.9);
+      return;
+    }
+    if (this.aiCoverUntil && time >= this.aiCoverUntil) {
+      this.aiCoverUntil = 0;
+      this.aiCoverTarget = null;
+    }
+
+    const pickup = this.activePickup && this.activePickup.active ? this.activePickup : null;
+    const aiWeapon = this.registry.get("aiWeapon") || "normal";
+    if (pickup && aiWeapon === "normal") {
+      const pickupId = pickup.getData("spawnId");
+      if (!this.aiPickupPlan || this.aiPickupPlan.id !== pickupId) {
+        this.aiPickupPlan = { id: pickupId, chaseAt: time + 2000 };
+      }
+      if (time >= this.aiPickupPlan.chaseAt) {
+        this._aiMoveTowardPoint({ x: pickup.x, y: pickup.y }, 0.85);
+        return;
+      }
+    } else {
+      this.aiPickupPlan = null;
+    }
 
     const dxP = p.x - a.x;
     const dyP = p.y - a.y;
@@ -1393,6 +1512,34 @@ class GameScene extends Phaser.Scene {
     });
   }
 
+  _updateBulletTrails(time) {
+    if (!this.bullets) return;
+    this.bullets.children.iterate((b) => {
+      if (!b || !b.active) return;
+      const last = b.getData("lastTrailAt") || 0;
+      if (time - last < 55) return;
+      b.setData("lastTrailAt", time);
+
+      const dmg = b.getData("damage") || 1;
+      const s = Phaser.Math.Clamp(0.35 + dmg * 0.12, 0.35, 0.75);
+
+      const pip = this.add.image(b.x, b.y, "trailDot");
+      pip.setDepth(3);
+      pip.setAlpha(0.22);
+      pip.setScale(s);
+      this.trailGroup.add(pip);
+
+      this.tweens.add({
+        targets: pip,
+        alpha: 0,
+        scale: s * 0.6,
+        duration: 240,
+        ease: "Quad.easeOut",
+        onComplete: () => pip.destroy()
+      });
+    });
+  }
+
   _onTankHit(which, bullet) {
     if (!bullet || !bullet.texture || bullet.texture.key !== "bullet") return;
 
@@ -1430,6 +1577,8 @@ class GameScene extends Phaser.Scene {
       this._flashTank(tank);
 
       this.registry.set("score", this.registry.get("score") + 100);
+
+      this._noteAIHitForCover(this.time.now);
 
       if (hp <= 0) this._endRound(true, "AI DESTROYED — Round Won");
     }
