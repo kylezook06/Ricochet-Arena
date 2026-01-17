@@ -227,13 +227,9 @@ class GameScene extends Phaser.Scene {
       }
     });
 
-    // Hint (bottom)
-    this.add.text(
-      this.ARENA.x,
-      this.ARENA.y + this.ARENA.h + 18,
-      "W/S move • A/D turn • SHIFT boost • SPACE fire • ENTER start/next • ←/→ set time (menu) • O obstacles (menu) • P/ESC pause • R restart • F fullscreen",
-      { fontFamily: "Arial", fontSize: "14px", color: "#cfcfcf" }
-    ).setAlpha(0.85);
+    this._createControlsTicker(
+      "W/S move • A/D turn • SHIFT boost • SPACE fire • ENTER start/next • ←/→ set time (menu) • O obstacles (menu) • P/ESC pause • R restart • F fullscreen"
+    );
 
     // Fullscreen toggle
     this.input.keyboard.on("keydown-F", () => {
@@ -353,6 +349,7 @@ class GameScene extends Phaser.Scene {
     this._updatePlayer(dt, time);
     this._updateAI(dt, time);
     this._cleanupBullets(time);
+    this._updateControlsTicker(dt);
   }
 
   // -----------------------------
@@ -375,6 +372,46 @@ class GameScene extends Phaser.Scene {
 
   _calcHPForSeconds(secs) {
     return Math.max(5, Math.round((secs / 30 - 1) * 5));
+  }
+
+  _createControlsTicker(text) {
+    const y = this.scale.height - 22;
+    const h = 22;
+    const w = this.scale.width;
+    const style = { fontFamily: "Arial", fontSize: "14px", color: "#cfcfcf" };
+    const gap = 60;
+
+    this.controls = {
+      speed: 90,
+      gap
+    };
+
+    this.controls.t1 = this.add.text(0, y, text, style).setAlpha(0.85);
+    this.controls.t2 = this.add
+      .text(this.controls.t1.width + gap, y, text, style)
+      .setAlpha(0.85);
+
+    const mg = this.make.graphics({ x: 0, y: 0, add: false });
+    mg.fillStyle(0xffffff, 1);
+    mg.fillRect(0, y - 2, w, h + 4);
+    const mask = mg.createGeometryMask();
+    this.controls.t1.setMask(mask);
+    this.controls.t2.setMask(mask);
+  }
+
+  _updateControlsTicker(dt) {
+    if (!this.controls) return;
+
+    const dx = this.controls.speed * dt;
+    this.controls.t1.x -= dx;
+    this.controls.t2.x -= dx;
+
+    if (this.controls.t1.x + this.controls.t1.width < 0) {
+      this.controls.t1.x = this.controls.t2.x + this.controls.t2.width + this.controls.gap;
+    }
+    if (this.controls.t2.x + this.controls.t2.width < 0) {
+      this.controls.t2.x = this.controls.t1.x + this.controls.t1.width + this.controls.gap;
+    }
   }
 
   _cycleRoundOption(dir) {
@@ -1105,17 +1142,44 @@ class GameScene extends Phaser.Scene {
     return null;
   }
 
+  _getClearBulletSpawn(shooter, dir) {
+    const start = 28;
+    const min = 10;
+    const step = 2;
+
+    for (let off = start; off >= min; off -= step) {
+      const x = shooter.x + dir.x * off;
+      const y = shooter.y + dir.y * off;
+      if (!this._isPointBlocked(shooter, x, y)) return { x, y };
+    }
+    return null;
+  }
+
+  _isPointBlocked(shooter, x, y) {
+    const bodies = this.physics.overlapRect(x - 4, y - 4, 8, 8, true, true);
+    for (const b of bodies) {
+      const go = b.gameObject;
+      if (!go) continue;
+      if (go === shooter) continue;
+      if (this.walls && typeof this.walls.contains === "function" && this.walls.contains(go)) return true;
+      if (this.obstacles && typeof this.obstacles.contains === "function" && this.obstacles.contains(go)) return true;
+    }
+    return false;
+  }
+
   _fireBullet(shooter, owner, time) {
+    const dir = new Phaser.Math.Vector2(1, 0).rotate(shooter.rotation);
+    const spawn = this._getClearBulletSpawn(shooter, dir);
+    if (!spawn) return;
+
     if (owner === "player") {
       this.registry.set("pShots", (this.registry.get("pShots") || 0) + 1);
-    } else {
+    } else if (owner === "ai") {
       this.registry.set("aiShots", (this.registry.get("aiShots") || 0) + 1);
     }
 
-    const dir = new Phaser.Math.Vector2(1, 0).rotate(shooter.rotation);
-    const spawnOffset = 28;
-    const x = shooter.x + dir.x * spawnOffset;
-    const y = shooter.y + dir.y * spawnOffset;
+    const x = spawn.x;
+    const y = spawn.y;
 
     const bullet = this.bullets.create(x, y, "bullet");
     if (!bullet) return;
@@ -1154,13 +1218,14 @@ class GameScene extends Phaser.Scene {
     }
     tank.setData("invulnUntil", now + 120);
 
-    bullet.destroy();
     const owner = bullet.getData("owner");
     if (owner === "player") {
       this.registry.set("pHits", (this.registry.get("pHits") || 0) + 1);
     } else if (owner === "ai") {
       this.registry.set("aiHits", (this.registry.get("aiHits") || 0) + 1);
     }
+
+    bullet.destroy();
 
     this._hitFX(tank.x, tank.y);
     this._sfxHit();
