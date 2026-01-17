@@ -81,6 +81,8 @@ class GameScene extends Phaser.Scene {
     this.registry.set("roundNumber", 0);
     this.registry.set("maxRounds", 5);
     this.registry.set("countdown", 0);
+    this.registry.set("obstacleMode", "fixed");
+    this.registry.set("obstacleSeed", 0);
     // ---- Game state
     this.registry.set("roundActive", false);
     this.registry.set("gameState", "menu"); // menu | playing | paused | betweenRounds
@@ -127,6 +129,7 @@ class GameScene extends Phaser.Scene {
 
       left: Phaser.Input.Keyboard.KeyCodes.LEFT,
       right: Phaser.Input.Keyboard.KeyCodes.RIGHT,
+      o: Phaser.Input.Keyboard.KeyCodes.O,
 
       p: Phaser.Input.Keyboard.KeyCodes.P,
       esc: Phaser.Input.Keyboard.KeyCodes.ESC,
@@ -217,7 +220,7 @@ class GameScene extends Phaser.Scene {
     this.add.text(
       this.ARENA.x,
       this.ARENA.y + this.ARENA.h + 18,
-      "W/S move • A/D turn • SHIFT boost • SPACE fire • ENTER start/next • ←/→ set time (menu) • P/ESC pause • R restart • F fullscreen",
+      "W/S move • A/D turn • SHIFT boost • SPACE fire • ENTER start/next • ←/→ set time (menu) • O obstacles (menu) • P/ESC pause • R restart • F fullscreen",
       { fontFamily: "Arial", fontSize: "14px", color: "#cfcfcf" }
     ).setAlpha(0.85);
 
@@ -261,6 +264,10 @@ class GameScene extends Phaser.Scene {
         this._cycleRoundOption(-1);
       } else if (Phaser.Input.Keyboard.JustDown(this.keys.right)) {
         this._cycleRoundOption(+1);
+      }
+
+      if (Phaser.Input.Keyboard.JustDown(this.keys.o)) {
+        this._toggleObstacleMode();
       }
 
       if (Phaser.Input.Keyboard.JustDown(this.keys.enter)) {
@@ -312,13 +319,15 @@ class GameScene extends Phaser.Scene {
   _refreshMenuText() {
     const secs = this.registry.get("roundSeconds") || this.ROUND_SECONDS;
     const winsToWin = this.registry.get("winsToWin") || 3;
+    const mode = this.registry.get("obstacleMode") || "fixed";
+    const modeLabel = (mode === "random") ? "Random (Chaos)" : "Fixed";
     this.registry.set(
       "message",
-      `RICOCHET ARENA\nRound: ${secs}s (←/→)\nFirst to ${winsToWin} wins`
+      `RICOCHET ARENA\nRound: ${secs}s (←/→)\nObstacles: ${modeLabel} (O)\nFirst to ${winsToWin} wins`
     );
     this.registry.set(
       "subMessage",
-      "Press ENTER to start • ←/→ time • P/ESC pause • R restart • F fullscreen"
+      "Press ENTER to start • ←/→ time • O obstacles • P/ESC pause • R restart • F fullscreen"
     );
   }
 
@@ -330,6 +339,16 @@ class GameScene extends Phaser.Scene {
     this.registry.set("roundOptIndex", idx);
     this.registry.set("roundSeconds", this.ROUND_OPTIONS[idx]);
 
+    this._refreshMenuText();
+  }
+
+  _toggleObstacleMode() {
+    const cur = this.registry.get("obstacleMode") || "fixed";
+    const next = (cur === "fixed") ? "random" : "fixed";
+    this.registry.set("obstacleMode", next);
+    if (next === "random") {
+      this.registry.set("obstacleSeed", Phaser.Math.Between(1, 999999));
+    }
     this._refreshMenuText();
   }
 
@@ -493,6 +512,15 @@ class GameScene extends Phaser.Scene {
     this.walls.children.iterate(w => w.setVisible(false));
   }
 
+  _rectsOverlap(a, b, pad = 0) {
+    return !(
+      a.x + a.w / 2 + pad < b.x - b.w / 2 ||
+      a.x - a.w / 2 - pad > b.x + b.w / 2 ||
+      a.y + a.h / 2 + pad < b.y - b.h / 2 ||
+      a.y - a.h / 2 - pad > b.y + b.h / 2
+    );
+  }
+
   _getObstacleAABBs(pad = 6) {
     const out = [];
     if (!this.obstacles) return out;
@@ -623,6 +651,85 @@ class GameScene extends Phaser.Scene {
     return best;
   }
 
+  _makeRandomBlocks(seed) {
+    const rng = new Phaser.Math.RandomDataGenerator([String(seed || 1)]);
+
+    const paddingFromWalls = 26;
+    const spawnSafeRadius = 90;
+    const minGap = 14;
+    const maxBlocks = rng.between(5, 9);
+
+    const blocks = [];
+    const arenaLeft = this.ARENA.x + paddingFromWalls;
+    const arenaRight = this.ARENA.x + this.ARENA.w - paddingFromWalls;
+    const arenaTop = this.ARENA.y + paddingFromWalls;
+    const arenaBottom = this.ARENA.y + this.ARENA.h - paddingFromWalls;
+
+    const ps = this.SPAWN.player;
+    const as = this.SPAWN.ai;
+
+    const isNearSpawn = (x, y) => {
+      const dp = Phaser.Math.Distance.Between(x, y, ps.x, ps.y);
+      const da = Phaser.Math.Distance.Between(x, y, as.x, as.y);
+      return dp < spawnSafeRadius || da < spawnSafeRadius;
+    };
+
+    const corridorY = (ps.y + as.y) / 2;
+    const corridorBand = 50;
+
+    const attempts = 220;
+    for (let i = 0; i < attempts && blocks.length < maxBlocks; i++) {
+      const isPillar = rng.frac() < 0.45;
+
+      let w;
+      let h;
+      if (isPillar) {
+        w = rng.between(32, 56);
+        h = rng.between(32, 56);
+      } else {
+        const horizontal = rng.frac() < 0.55;
+        if (horizontal) {
+          w = rng.between(90, 180);
+          h = rng.between(14, 22);
+        } else {
+          w = rng.between(14, 22);
+          h = rng.between(90, 170);
+        }
+      }
+
+      const x = rng.between(arenaLeft + w / 2, arenaRight - w / 2);
+      const y = rng.between(arenaTop + h / 2, arenaBottom - h / 2);
+
+      if (isNearSpawn(x, y)) continue;
+
+      const nearCorridor = Math.abs(y - corridorY) < corridorBand;
+      if (nearCorridor && (w * h) > 8000 && rng.frac() < 0.75) continue;
+
+      const candidate = { x, y, w, h };
+
+      let ok = true;
+      for (const b of blocks) {
+        if (this._rectsOverlap(candidate, b, minGap)) {
+          ok = false;
+          break;
+        }
+      }
+      if (!ok) continue;
+
+      blocks.push(candidate);
+    }
+
+    if (blocks.length < 3) {
+      return [
+        { x: this.ARENA.x + this.ARENA.w / 2, y: this.ARENA.y + this.ARENA.h / 2, w: 60, h: 60 },
+        { x: this.ARENA.x + this.ARENA.w * 0.5, y: this.ARENA.y + this.ARENA.h * 0.33, w: 140, h: 18 },
+        { x: this.ARENA.x + this.ARENA.w * 0.5, y: this.ARENA.y + this.ARENA.h * 0.67, w: 140, h: 18 }
+      ];
+    }
+
+    return blocks;
+  }
+
   _createObstacles() {
     if (this.obstacleColliders) {
       this.obstacleColliders.forEach((collider) => {
@@ -648,16 +755,25 @@ class GameScene extends Phaser.Scene {
 
     this.obstacles = this.physics.add.staticGroup();
 
+    const mode = this.registry.get("obstacleMode") || "fixed";
     let blocksPx = [];
-    const layoutIndex = Phaser.Math.Between(0, this.LAYOUTS.length - 1);
-    this.registry.set("layoutIndex", layoutIndex);
-    const blocks = this.LAYOUTS[layoutIndex];
-    blocksPx = blocks.map((b) => ({
-      x: this.ARENA.x + b.x * this.ARENA.w,
-      y: this.ARENA.y + b.y * this.ARENA.h,
-      w: b.w,
-      h: b.h
-    }));
+    if (mode === "fixed") {
+      const layoutIndex = Phaser.Math.Between(0, this.LAYOUTS.length - 1);
+      this.registry.set("layoutIndex", layoutIndex);
+      const blocks = this.LAYOUTS[layoutIndex];
+      blocksPx = blocks.map((b) => ({
+        x: this.ARENA.x + b.x * this.ARENA.w,
+        y: this.ARENA.y + b.y * this.ARENA.h,
+        w: b.w,
+        h: b.h
+      }));
+    } else {
+      const seed = this.registry.get("obstacleSeed") || Phaser.Math.Between(1, 999999);
+      const nextSeed = (seed + 1) % 1000000;
+      this.registry.set("obstacleSeed", nextSeed);
+      blocksPx = this._makeRandomBlocks(seed);
+      this.registry.set("layoutIndex", -1);
+    }
 
     blocksPx.forEach((b) => {
       const x = b.x;
