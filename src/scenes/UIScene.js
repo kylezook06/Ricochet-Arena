@@ -64,6 +64,17 @@ class UIScene extends Phaser.Scene {
       align: "center"
     }).setOrigin(0.5).setAlpha(0).setDepth(2);
 
+    this.ui.hpText.setDepth(0);
+    this.ui.timeText.setDepth(0);
+    this.ui.scoreText.setDepth(0);
+    this.ui.boostText.setDepth(0);
+    this.ui.boostBar.setDepth(0);
+    this.ui.matchText.setDepth(0);
+    this.ui.weaponText.setDepth(0);
+    this.ui.dim.setDepth(1);
+    this.ui.centerMsg.setDepth(2);
+    this.ui.subMsg.setDepth(2);
+
     // Update UI frequently
     this.time.addEvent({
       delay: 50,
@@ -73,6 +84,10 @@ class UIScene extends Phaser.Scene {
   }
 
   _refresh() {
+    this.ui.dim.setPosition(this.scale.width / 2, this.scale.height / 2);
+    this.ui.dim.width = this.scale.width;
+    this.ui.dim.height = this.scale.height;
+
     const pHP = this.registry.get("playerHP");
     const aHP = this.registry.get("aiHP");
     const t = this.registry.get("timeLeft");
@@ -148,6 +163,15 @@ class UIScene extends Phaser.Scene {
       this.ui.centerMsg.setText(msg);
       const sub = this.registry.get("subMessage") || "Press R to Restart";
       this.ui.subMsg.setText(sub);
+
+      const cx = this.scale.width / 2;
+      const cy = this.scale.height / 2;
+      this.ui.centerMsg.setPosition(cx, cy - 40);
+      this.ui.subMsg.setPosition(cx, cy + 90);
+
+      const b = this.ui.centerMsg.getBounds();
+      this.ui.subMsg.y = Math.min(this.scale.height - 70, b.bottom + 28);
+
       this.ui.centerMsg.setAlpha(1);
       this.ui.subMsg.setAlpha(1);
     } else {

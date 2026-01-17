@@ -1365,7 +1365,17 @@ class GameScene extends Phaser.Scene {
       bullet.setData("speed", wpn.speed);
 
       bullet.body.setAllowGravity(false);
-      bullet.body.setCircle(4);
+      let r = 4;
+      let s = 1.0;
+      if (weaponKey === "heavy") {
+        r = 6;
+        s = 1.6;
+      } else if (weaponKey === "long") {
+        r = 5;
+        s = 1.25;
+      }
+      bullet.setScale(s);
+      bullet.body.setCircle(r);
       bullet.setBounce(1, 1);
 
       bullet.body.setVelocity(dir.x * wpn.speed, dir.y * wpn.speed);
@@ -1397,6 +1407,7 @@ class GameScene extends Phaser.Scene {
     tank.setData("invulnUntil", now + 120);
 
     const owner = bullet.getData("owner");
+    const dmg = bullet.getData("damage") || 1;
     if (owner === "player") {
       this.registry.set("pHits", (this.registry.get("pHits") || 0) + 1);
     } else if (owner === "ai") {
@@ -1408,7 +1419,6 @@ class GameScene extends Phaser.Scene {
     this._hitFX(tank.x, tank.y);
     this._sfxHit();
 
-    const dmg = bullet.getData("damage") || 1;
     if (which === "player") {
       const hp = this.registry.get("playerHP") - dmg;
       this.registry.set("playerHP", hp);
