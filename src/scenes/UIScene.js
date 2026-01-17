@@ -44,6 +44,12 @@ class UIScene extends Phaser.Scene {
       color: "#eaeaea"
     });
 
+    this.ui.weaponText = this.add.text(16, 160, "", {
+      fontFamily: "Arial",
+      fontSize: "18px",
+      color: "#eaeaea"
+    });
+
     this.ui.centerMsg = this.add.text(480, 270, "", {
       fontFamily: "Arial",
       fontSize: "34px",
@@ -85,6 +91,18 @@ class UIScene extends Phaser.Scene {
     this.ui.matchText.setText(
       `Match  You: ${pW}    AI: ${aW}   (First to ${toWin})   • Round ${roundNum}/${maxRounds}`
     );
+
+    const pWpn = (this.registry.get("playerWeapon") || "normal");
+    const aWpn = (this.registry.get("aiWeapon") || "normal");
+    const pretty = (k) => {
+      const s = String(k || "normal").toUpperCase();
+      if (s === "NORMAL") return "NORMAL";
+      if (s === "HEAVY") return "HEAVY";
+      if (s === "SCATTER") return "SCATTER";
+      if (s === "LONG") return "LONG";
+      return s;
+    };
+    this.ui.weaponText.setText(`Weapon  You: ${pretty(pWpn)}    AI: ${pretty(aWpn)}`);
 
     // Boost UI
     const now = this.time.now;
