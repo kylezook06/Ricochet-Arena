@@ -1,0 +1,1760 @@
+class GameScene extends Phaser.Scene {
+  constructor() {
+    super("GameScene");
+
+    // Gameplay constants
+    this.ARENA = { x: 80, y: 60, w: 800, h: 420 };
+
+    this.ROUND_SECONDS = 90; // default
+    this.ROUND_OPTIONS = [60, 90, 120];
+
+    this.TANK = {
+      turnSpeed: 2.8,
+      accel: 260,
+      maxSpeed: 220,
+      friction: 0.985
+    };
+
+    this.BOOST = {
+      multiplier: 1.75,
+      durationMs: 650,
+      cooldownMs: 2500
+    };
+
+    this.BULLET = {
+      speed: 420,
+      lifeMs: 2200,
+      cooldownMs: 260
+    };
+
+    this.WEAPONS = {
+      normal: { key: "normal", speed: this.BULLET.speed, lifeMs: this.BULLET.lifeMs, dmg: 1, count: 1, spread: 0 },
+      heavy: { key: "heavy", speed: 260, lifeMs: 2600, dmg: 2, count: 1, spread: 0 },
+      scatter: { key: "scatter", speed: 420, lifeMs: 900, dmg: 1, count: 3, spread: 0.15 },
+      long: { key: "long", speed: 500, lifeMs: 4200, dmg: 1, count: 1, spread: 0 }
+    };
+
+    this.PICKUP = {
+      onScreenMs: 10000,
+      gapMinMs: 10000,
+      gapMaxMs: 15000
+    };
+
+    this.AI = {
+      fireCooldownMs: 420,
+      moveBias: 0.85,
+      wobble: 0.65,
+      retreatDist: 140,
+      bankChance: 0.35,
+      bankThinkMs: 300,
+      bankAimMs: 900,
+      bankFacingFire: 0.30
+    };
+
+    // Obstacle layouts (normalized positions inside arena)
+    this.LAYOUTS = [
+      [
+        { x: 0.50, y: 0.50, w: 80, h: 80 },
+        { x: 0.50, y: 0.33, w: 140, h: 18 },
+        { x: 0.50, y: 0.67, w: 140, h: 18 },
+        { x: 0.25, y: 0.50, w: 18, h: 160 },
+        { x: 0.75, y: 0.50, w: 18, h: 160 }
+      ],
+      [
+        { x: 0.35, y: 0.40, w: 220, h: 18 },
+        { x: 0.65, y: 0.60, w: 220, h: 18 },
+        { x: 0.35, y: 0.60, w: 18, h: 160 },
+        { x: 0.65, y: 0.40, w: 18, h: 160 }
+      ],
+      [
+        { x: 0.33, y: 0.33, w: 40, h: 40 },
+        { x: 0.67, y: 0.33, w: 40, h: 40 },
+        { x: 0.33, y: 0.67, w: 40, h: 40 },
+        { x: 0.67, y: 0.67, w: 40, h: 40 },
+        { x: 0.50, y: 0.50, w: 50, h: 50 }
+      ],
+      [
+        { x: 0.30, y: 0.30, w: 140, h: 18 },
+        { x: 0.70, y: 0.70, w: 140, h: 18 },
+        { x: 0.70, y: 0.30, w: 18, h: 140 },
+        { x: 0.30, y: 0.70, w: 18, h: 140 }
+      ]
+    ];
+  }
+
+  init() {
+    // ---- Match settings / state
+    const defaultIndex = this.ROUND_OPTIONS.indexOf(this.ROUND_SECONDS);
+    this.registry.set("roundOptIndex", defaultIndex >= 0 ? defaultIndex : 1);
+    this.registry.set("roundSeconds", this.ROUND_OPTIONS[this.registry.get("roundOptIndex")] || this.ROUND_SECONDS);
+
+    this.registry.set("winsToWin", 3);
+    this.registry.set("playerWins", 0);
+    this.registry.set("aiWins", 0);
+    this.registry.set("roundNumber", 0);
+    this.registry.set("maxRounds", 5);
+    this.registry.set("countdown", 0);
+    this.registry.set("obstacleMode", "fixed");
+    this.registry.set("obstacleSeed", 0);
+    // ---- Game state
+    this.registry.set("roundActive", false);
+    this.registry.set("gameState", "menu"); // menu | playing | paused | betweenRounds
+
+    // ---- Run state
+    this.registry.set("score", 0);
+    this.registry.set("playerHP", 5);
+    this.registry.set("aiHP", 5);
+    this.registry.set("timeLeft", this.registry.get("roundSeconds"));
+
+    this.SPAWN = {
+      player: { x: this.ARENA.x + 140, y: this.ARENA.y + this.ARENA.h / 2, rot: 0 },
+      ai: { x: this.ARENA.x + this.ARENA.w - 140, y: this.ARENA.y + this.ARENA.h / 2, rot: Math.PI }
+    };
+
+    // ---- Boost state (for UI)
+    this.boostActiveUntil = 0;
+    this.boostReadyAt = 0;
+    this.registry.set("boostActiveUntil", 0);
+    this.registry.set("boostReadyAt", 0);
+    this.registry.set("boostCooldownMs", this.BOOST.cooldownMs);
+
+    // ---- WebAudio SFX (no external files)
+    this.audioCtx = null;
+    this.sfxEnabled = true;
+    this.lastRicochetAt = 0;
+
+    // ---- Post-match + stats
+    this.registry.set("postMatch", false);
+    this.registry.set("lastMatchResult", "");
+    this.registry.set("summaryText", "");
+    this.registry.set("pShots", 0);
+    this.registry.set("pHits", 0);
+    this.registry.set("aiShots", 0);
+    this.registry.set("aiHits", 0);
+    this.registry.set("matchTimePlayed", 0);
+    this.registry.set("playerWeapon", this.registry.get("playerWeapon") || "normal");
+    this.registry.set("aiWeapon", this.registry.get("aiWeapon") || "normal");
+    this.nextPickupAt = 0;
+    this.activePickup = null;
+    this.aiLastHitAt = 0;
+    this.aiHitStreak = 0;
+    this.aiCoverUntil = 0;
+    this.aiCoverTarget = null;
+    this.aiPickupPlan = null;
+    this._slowMoActive = false;
+
+    // ---- AI bank-shot state
+    this.aiAimMode = "direct";
+    this.aiAimExpireAt = 0;
+    this.aiNextBankThinkAt = 0;
+    this.aiBankPlan = null;
+
+    this._refreshMenuText();
+  }
+
+  create() {
+    // --- Inputs
+    this.keys = this.input.keyboard.addKeys({
+      w: Phaser.Input.Keyboard.KeyCodes.W,
+      a: Phaser.Input.Keyboard.KeyCodes.A,
+      s: Phaser.Input.Keyboard.KeyCodes.S,
+      d: Phaser.Input.Keyboard.KeyCodes.D,
+
+      left: Phaser.Input.Keyboard.KeyCodes.LEFT,
+      right: Phaser.Input.Keyboard.KeyCodes.RIGHT,
+      o: Phaser.Input.Keyboard.KeyCodes.O,
+
+      m: Phaser.Input.Keyboard.KeyCodes.M,
+      p: Phaser.Input.Keyboard.KeyCodes.P,
+      esc: Phaser.Input.Keyboard.KeyCodes.ESC,
+
+      shift: Phaser.Input.Keyboard.KeyCodes.SHIFT,
+      space: Phaser.Input.Keyboard.KeyCodes.SPACE,
+      enter: Phaser.Input.Keyboard.KeyCodes.ENTER,
+      r: Phaser.Input.Keyboard.KeyCodes.R
+    });
+
+    // --- Arena walls
+    this._createArena();
+
+    // --- Placeholder textures
+    this._createTankTextures();
+
+    // --- Tanks
+    this.player = this._spawnTank(
+      this.ARENA.x + 140,
+      this.ARENA.y + this.ARENA.h / 2,
+      "tank_player"
+    );
+
+    this.ai = this._spawnTank(
+      this.ARENA.x + this.ARENA.w - 140,
+      this.ARENA.y + this.ARENA.h / 2,
+      "tank_ai"
+    );
+
+    // --- Bullets
+    this.bullets = this.physics.add.group();
+    this.trailGroup = this.add.group();
+
+    // --- Obstacles
+    this._createObstacles();
+
+    // --- Weapon pickups
+    this.pickups = this.physics.add.staticGroup();
+
+    this.physics.add.overlap(this.player, this.pickups, (tank, pickup) => {
+      if (!this.registry.get("roundActive")) return;
+      this._collectPickup("player", pickup);
+    });
+
+    this.physics.add.overlap(this.ai, this.pickups, (tank, pickup) => {
+      if (!this.registry.get("roundActive")) return;
+      this._collectPickup("ai", pickup);
+    });
+
+    // --- Collisions
+    this.physics.add.collider(this.player, this.walls);
+    this.physics.add.collider(this.ai, this.walls);
+
+    // Bullets bounce off walls
+    this.physics.add.collider(this.bullets, this.walls, (bullet) => {
+      const b = bullet.body;
+      if (!b) return;
+
+      const sp = Math.sqrt(b.velocity.x * b.velocity.x + b.velocity.y * b.velocity.y);
+      const max = (bullet.getData("speed") || this.BULLET.speed) * 1.05;
+      if (sp > max) {
+        const s = max / sp;
+        b.velocity.x *= s;
+        b.velocity.y *= s;
+      }
+      this._sfxRicochet();
+    });
+
+    // Bullets hit tanks
+    this.physics.add.overlap(this.bullets, this.player, (obj1, obj2) => {
+      if (!this.registry.get("roundActive")) return;
+      const bullet = this._resolveBullet(obj1, obj2);
+      if (!bullet || !bullet.active) return;
+      if (bullet.getData("owner") === "player") return;
+      this._onTankHit("player", bullet);
+    });
+
+    this.physics.add.overlap(this.bullets, this.ai, (obj1, obj2) => {
+      if (!this.registry.get("roundActive")) return;
+      const bullet = this._resolveBullet(obj1, obj2);
+      if (!bullet || !bullet.active) return;
+      if (bullet.getData("owner") === "ai") return;
+      this._onTankHit("ai", bullet);
+    });
+
+    // --- Timers / cooldowns
+    this.lastPlayerShotAt = 0;
+    this.lastAiShotAt = 0;
+
+    this.roundTimer = this.time.addEvent({
+      delay: 1000,
+      loop: true,
+      callback: () => {
+        if (!this.registry.get("roundActive")) return;
+        const t = Math.max(0, this.registry.get("timeLeft") - 1);
+        this.registry.set("timeLeft", t);
+        if (t <= 0) this._endRound(false, "TIME UP — Round Lost", false);
+      }
+    });
+
+    this._createControlsTicker(
+      "W/S move • A/D turn • SHIFT boost • SPACE fire • ENTER start/next • ←/→ set time (menu) • O obstacles (menu) • P/ESC pause • R restart • F fullscreen"
+    );
+
+    // Fullscreen toggle
+    this.input.keyboard.on("keydown-F", () => {
+      if (this.scale.isFullscreen) this.scale.stopFullscreen();
+      else this.scale.startFullscreen();
+    });
+
+    // --- Hit sparks (particles)
+    this.sparks = this.add.particles(0, 0, "spark", {
+      emitting: false,
+      lifespan: { min: 140, max: 240 },
+      speed: { min: 70, max: 220 },
+      angle: { min: 0, max: 360 },
+      quantity: 10,
+      scale: { start: 1.0, end: 0.0 },
+      alpha: { start: 1.0, end: 0.0 },
+      rotate: { min: 0, max: 360 },
+      gravityY: 0
+    });
+    this.sparks.setDepth(20);
+
+    // Freeze world until player starts
+    this.physics.world.pause();
+    this._scheduleNextPickup();
+  }
+
+  update(time, delta) {
+    const dt = delta / 1000;
+
+    if (Phaser.Input.Keyboard.JustDown(this.keys.r)) {
+      this.scene.restart();
+      return;
+    }
+
+    const state = this.registry.get("gameState");
+
+    // ---- MENU (configure options)
+    if (state === "menu") {
+      if (Phaser.Input.Keyboard.JustDown(this.keys.left)) {
+        this._cycleRoundOption(-1);
+      } else if (Phaser.Input.Keyboard.JustDown(this.keys.right)) {
+        this._cycleRoundOption(+1);
+      }
+
+      if (Phaser.Input.Keyboard.JustDown(this.keys.o)) {
+        this._toggleObstacleMode();
+      }
+
+      if (
+        this.registry.get("postMatch") === true &&
+        this.registry.get("lastMatchResult") === "won" &&
+        Phaser.Input.Keyboard.JustDown(this.keys.m)
+      ) {
+        this._showSummaryScreen();
+        return;
+      }
+
+      if (Phaser.Input.Keyboard.JustDown(this.keys.enter)) {
+        this._ensureAudio();
+        this._startMatch();
+      }
+      return;
+    }
+
+    // ---- BETWEEN ROUNDS
+    if (state === "betweenRounds") {
+      if (Phaser.Input.Keyboard.JustDown(this.keys.enter)) {
+        this._ensureAudio();
+        // Start next round, keep match wins
+        this._startRound();
+      }
+      return;
+    }
+
+    if (state === "summary") {
+      if (Phaser.Input.Keyboard.JustDown(this.keys.enter)) {
+        this._ensureAudio();
+        this._startMatch();
+      } else if (Phaser.Input.Keyboard.JustDown(this.keys.esc)) {
+        this.registry.set("gameState", "menu");
+        this.registry.set("roundActive", false);
+        this.physics.world.pause();
+
+        const pW = this.registry.get("playerWins") || 0;
+        const aW = this.registry.get("aiWins") || 0;
+        const won = this.registry.get("lastMatchResult") === "won";
+        const summaryLink = won ? " • M summary" : "";
+        this.registry.set("message", won ? "MATCH WON" : "MATCH LOST");
+        this.registry.set(
+          "subMessage",
+          `Final: You ${pW} – AI ${aW} • ←/→ set time • ENTER new match${summaryLink} • R restart`
+        );
+      }
+      return;
+    }
+
+    // ---- Pause toggle (only while playing/paused)
+    if (Phaser.Input.Keyboard.JustDown(this.keys.p) || Phaser.Input.Keyboard.JustDown(this.keys.esc)) {
+      const s = this.registry.get("gameState");
+      if (s === "playing") this._pauseGame();
+      else if (s === "paused") this._resumeGame();
+    }
+
+    if (this.registry.get("gameState") === "paused") return;
+    if (!this.registry.get("roundActive")) return;
+
+    if (!this.player || !this.ai || !this.player.body || !this.ai.body) return;
+
+    // Defensive: keep visible + physics enabled
+    this.player.setVisible(true).setAlpha(1).setDepth(10);
+    this.ai.setVisible(true).setAlpha(1).setDepth(10);
+
+    this.player.body.enable = true;
+    this.ai.body.enable = true;
+    this.player.body.moves = true;
+    this.ai.body.moves = true;
+
+    this._updatePlayer(dt, time);
+    this._updateAI(dt, time);
+    this._cleanupBullets(time);
+    this._updateBulletTrails(time);
+    this._updatePickupLifecycle();
+    this._updateControlsTicker(dt);
+  }
+
+  // -----------------------------
+  // Menu / Match flow
+  // -----------------------------
+  _refreshMenuText() {
+    const secs = this.registry.get("roundSeconds") || this.ROUND_SECONDS;
+    const winsToWin = this.registry.get("winsToWin") || 3;
+    const mode = this.registry.get("obstacleMode") || "fixed";
+    const modeLabel = (mode === "random") ? "Random (Chaos)" : "Fixed";
+    this.registry.set(
+      "message",
+      `RICOCHET ARENA\nRound: ${secs}s (←/→)\nObstacles: ${modeLabel} (O)\nFirst to ${winsToWin} wins`
+    );
+    this.registry.set(
+      "subMessage",
+      "Press ENTER to start • ←/→ time • O obstacles • P/ESC pause • R restart • F fullscreen"
+    );
+  }
+
+  _calcHPForSeconds(secs) {
+    return Math.max(5, Math.round((secs / 30 - 1) * 5));
+  }
+
+  _createControlsTicker(text) {
+    const y = this.scale.height - 22;
+    const h = 22;
+    const w = this.scale.width;
+    const style = { fontFamily: "Arial", fontSize: "14px", color: "#cfcfcf" };
+    const gap = 60;
+
+    this.controls = {
+      speed: 90,
+      gap
+    };
+
+    this.controls.t1 = this.add.text(0, y, text, style).setAlpha(0.85);
+    this.controls.t2 = this.add
+      .text(this.controls.t1.width + gap, y, text, style)
+      .setAlpha(0.85);
+
+    const mg = this.make.graphics({ x: 0, y: 0, add: false });
+    mg.fillStyle(0xffffff, 1);
+    mg.fillRect(0, y - 2, w, h + 4);
+    const mask = mg.createGeometryMask();
+    this.controls.t1.setMask(mask);
+    this.controls.t2.setMask(mask);
+  }
+
+  _updateControlsTicker(dt) {
+    if (!this.controls) return;
+
+    const dx = this.controls.speed * dt;
+    this.controls.t1.x -= dx;
+    this.controls.t2.x -= dx;
+
+    if (this.controls.t1.x + this.controls.t1.width < 0) {
+      this.controls.t1.x = this.controls.t2.x + this.controls.t2.width + this.controls.gap;
+    }
+    if (this.controls.t2.x + this.controls.t2.width < 0) {
+      this.controls.t2.x = this.controls.t1.x + this.controls.t1.width + this.controls.gap;
+    }
+  }
+
+  _noteAIHitForCover(now) {
+    const windowMs = 1100;
+    if (now - (this.aiLastHitAt || 0) <= windowMs) {
+      this.aiHitStreak = (this.aiHitStreak || 0) + 1;
+    } else {
+      this.aiHitStreak = 1;
+    }
+    this.aiLastHitAt = now;
+
+    const v = (this.ai && this.ai.body) ? this.ai.body.velocity : null;
+    const moving = v ? (v.x * v.x + v.y * v.y) > (35 * 35) : false;
+    if (this.aiHitStreak >= 3 && !moving) {
+      this._triggerAICover(now);
+      this.aiHitStreak = 0;
+    }
+  }
+
+  _triggerAICover(now) {
+    const target = this._findCoverPoint();
+    if (!target) return;
+    this.aiCoverTarget = target;
+    this.aiCoverUntil = now + 1600;
+  }
+
+  _findCoverPoint() {
+    if (!this.ai || !this.player) return null;
+    const aabbs = this._getObstacleAABBs ? this._getObstacleAABBs(8) : [];
+    if (!aabbs.length) return null;
+
+    const ax = this.ai.x;
+    const ay = this.ai.y;
+    const px = this.player.x;
+    const py = this.player.y;
+
+    const clamp = (x, y) => ({
+      x: Phaser.Math.Clamp(x, this.ARENA.x + 18, this.ARENA.x + this.ARENA.w - 18),
+      y: Phaser.Math.Clamp(y, this.ARENA.y + 18, this.ARENA.y + this.ARENA.h - 18)
+    });
+
+    let best = null;
+
+    for (const b of aabbs) {
+      const cx = (b.xmin + b.xmax) * 0.5;
+      const cy = (b.ymin + b.ymax) * 0.5;
+
+      const vx = cx - px;
+      const vy = cy - py;
+      const len = Math.hypot(vx, vy) || 1;
+
+      const pad = 28;
+      const half = Math.max(b.xmax - b.xmin, b.ymax - b.ymin) * 0.5;
+      const tx = cx + (vx / len) * (half + pad);
+      const ty = cy + (vy / len) * (half + pad);
+
+      const t = clamp(tx, ty);
+      if (this._hasLineOfSight && this._hasLineOfSight(px, py, t.x, t.y, 6)) continue;
+
+      const d = Phaser.Math.Distance.Between(ax, ay, t.x, t.y);
+      if (!best || d < best.d) best = { d, x: t.x, y: t.y };
+    }
+
+    return best ? { x: best.x, y: best.y } : null;
+  }
+
+  _aiMoveTowardPoint(target, speed01 = 1) {
+    if (!this.ai || !this.ai.body || !target) return;
+    const dx = target.x - this.ai.x;
+    const dy = target.y - this.ai.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist < 16) {
+      this.ai.body.velocity.scale(this.TANK.friction);
+      return;
+    }
+    const ang = Math.atan2(dy, dx);
+    this.ai.rotation = Phaser.Math.Angle.RotateTo(this.ai.rotation, ang, 0.05);
+    const speed = this.TANK.maxSpeed * 0.6 * speed01;
+    this.physics.velocityFromRotation(this.ai.rotation, speed, this.ai.body.velocity);
+  }
+
+  _scheduleNextPickup() {
+    this.nextPickupAt = this.time.now + Phaser.Math.Between(this.PICKUP.gapMinMs, this.PICKUP.gapMaxMs);
+  }
+
+  _spawnPickup() {
+    if (this.activePickup && this.activePickup.active) return;
+
+    const types = ["heavy", "scatter", "long"];
+    const type = Phaser.Utils.Array.GetRandom(types);
+    const pos = this._findPickupSpawnPoint();
+    if (!pos) {
+      this._scheduleNextPickup();
+      return;
+    }
+
+    const tex = `pickup_${type}`;
+    const pickup = this.pickups.create(pos.x, pos.y, tex);
+    pickup.setData("type", type);
+    pickup.setData("expiresAt", this.time.now + this.PICKUP.onScreenMs);
+    pickup.setData("spawnId", `${type}-${this.time.now}`);
+    pickup.setVisible(true);
+
+    this.tweens.add({
+      targets: pickup,
+      scale: 1.08,
+      duration: 300,
+      yoyo: true,
+      repeat: -1
+    });
+
+    this.activePickup = pickup;
+  }
+
+  _collectPickup(who, pickup) {
+    if (!pickup || !pickup.active) return;
+
+    const type = pickup.getData("type") || "normal";
+    if (who === "player") {
+      this.registry.set("playerWeapon", type);
+    } else {
+      this.registry.set("aiWeapon", type);
+    }
+
+    pickup.destroy();
+    this.activePickup = null;
+    this._scheduleNextPickup();
+  }
+
+  _updatePickupLifecycle() {
+    if (this.activePickup && this.activePickup.active) {
+      const exp = this.activePickup.getData("expiresAt") || 0;
+      if (this.time.now >= exp) {
+        this.activePickup.destroy();
+        this.activePickup = null;
+        this._scheduleNextPickup();
+      }
+      return;
+    }
+
+    if (this.time.now >= (this.nextPickupAt || 0)) {
+      this._spawnPickup();
+    }
+  }
+
+  _findPickupSpawnPoint() {
+    const pad = 30;
+    const tries = 40;
+
+    const left = this.ARENA.x + pad;
+    const right = this.ARENA.x + this.ARENA.w - pad;
+    const top = this.ARENA.y + pad;
+    const bottom = this.ARENA.y + this.ARENA.h - pad;
+
+    const ps = this.SPAWN.player;
+    const as = this.SPAWN.ai;
+
+    for (let i = 0; i < tries; i++) {
+      const x = Phaser.Math.Between(left, right);
+      const y = Phaser.Math.Between(top, bottom);
+
+      if (Phaser.Math.Distance.Between(x, y, ps.x, ps.y) < 90) continue;
+      if (Phaser.Math.Distance.Between(x, y, as.x, as.y) < 90) continue;
+      if (this._isPointBlocked(this.player, x, y)) continue;
+
+      return { x, y };
+    }
+
+    return null;
+  }
+
+  _cycleRoundOption(dir) {
+    const len = this.ROUND_OPTIONS.length;
+    let idx = this.registry.get("roundOptIndex") || 0;
+    idx = (idx + dir + len) % len;
+
+    this.registry.set("roundOptIndex", idx);
+    this.registry.set("roundSeconds", this.ROUND_OPTIONS[idx]);
+
+    this._refreshMenuText();
+  }
+
+  _toggleObstacleMode() {
+    const cur = this.registry.get("obstacleMode") || "fixed";
+    const next = (cur === "fixed") ? "random" : "fixed";
+    this.registry.set("obstacleMode", next);
+    if (next === "random") {
+      this.registry.set("obstacleSeed", Phaser.Math.Between(1, 999999));
+    }
+    this._refreshMenuText();
+  }
+
+  _startMatch() {
+    // Reset match + score, then begin round 1
+    this.registry.set("playerWins", 0);
+    this.registry.set("aiWins", 0);
+    this.registry.set("score", 0);
+    this.registry.set("roundNumber", 0);
+    this.registry.set("postMatch", false);
+    this.registry.set("lastMatchResult", "");
+    this.registry.set("summaryText", "");
+    this.registry.set("pShots", 0);
+    this.registry.set("pHits", 0);
+    this.registry.set("aiShots", 0);
+    this.registry.set("aiHits", 0);
+    this.registry.set("matchTimePlayed", 0);
+    this.registry.set("playerWeapon", "normal");
+    this.registry.set("aiWeapon", "normal");
+    this._startRound();
+  }
+
+  _startRound() {
+    this.registry.set("roundActive", true);
+    this.registry.set("gameState", "playing");
+    this.registry.set("message", "");
+    this.registry.set("subMessage", "P/ESC pause • R restart");
+
+    const secs = this.registry.get("roundSeconds") || this.ROUND_SECONDS;
+    const hp = this._calcHPForSeconds(secs);
+
+    this.registry.set("playerHP", hp);
+    this.registry.set("aiHP", hp);
+    this.registry.set("playerHPMax", hp);
+    this.registry.set("aiHPMax", hp);
+    this.registry.set("playerWeapon", "normal");
+    this.registry.set("aiWeapon", "normal");
+    this.registry.set("timeLeft", secs);
+
+    const pW = this.registry.get("playerWins") || 0;
+    const aW = this.registry.get("aiWins") || 0;
+    const winsToWin = this.registry.get("winsToWin") || 3;
+    this.registry.set("maxRounds", winsToWin * 2 - 1);
+    this.registry.set("roundNumber", pW + aW + 1);
+
+    // New round: clear bullets
+    if (this.bullets) {
+      this.bullets.children.iterate((b) => {
+        if (b && typeof b.destroy === "function") b.destroy();
+      });
+      if (typeof this.bullets.clear === "function") {
+        this.bullets.clear(true, true);
+      }
+    }
+
+    // New round: new obstacle layout (optional but nice)
+    this._createObstacles();
+    if (this.pickups) {
+      this.pickups.clear(true, true);
+    }
+    this.activePickup = null;
+    this._scheduleNextPickup();
+
+    this._respawnTanks();
+    this._beginCountdown();
+  }
+
+  _pauseGame() {
+    if (!this.registry.get("roundActive")) return;
+
+    this.registry.set("roundActive", false);
+    this.registry.set("gameState", "paused");
+    this.registry.set("message", "PAUSED");
+    this.registry.set("subMessage", "Press P/ESC to resume • R restart");
+
+    this.player.body.setVelocity(0, 0);
+    this.ai.body.setVelocity(0, 0);
+    this.physics.world.pause();
+  }
+
+  _resumeGame() {
+    if (this.registry.get("gameState") !== "paused") return;
+
+    this.registry.set("roundActive", true);
+    this.registry.set("gameState", "playing");
+    this.registry.set("message", "");
+    this.registry.set("subMessage", "P/ESC pause • R restart");
+
+    this.physics.world.resume();
+  }
+
+  _beginCountdown() {
+    this.registry.set("gameState", "countdown");
+    this.registry.set("roundActive", false);
+    this.registry.set("message", "GET READY");
+    this.registry.set("subMessage", "Round starts in 3...");
+    this.registry.set("countdown", 3);
+
+    this.physics.world.pause();
+
+    const steps = [3, 2, 1];
+    steps.forEach((n, i) => {
+      this.time.delayedCall(i * 400, () => {
+        this.registry.set("countdown", n);
+        this.registry.set("message", "ROUND STARTING");
+        this.registry.set("subMessage", `Starting in ${n}...`);
+        this._sfxCountdownTick(n);
+      });
+    });
+
+    this.time.delayedCall(steps.length * 400, () => {
+      this.registry.set("countdown", 0);
+      this.registry.set("message", "");
+      this.registry.set("subMessage", "P/ESC pause • R restart");
+      this.registry.set("roundActive", true);
+      this.registry.set("gameState", "playing");
+      this.physics.world.resume();
+
+      this.lastPlayerShotAt = this.time.now;
+      this.lastAiShotAt = this.time.now;
+      this._sfxGo();
+    });
+  }
+
+  _respawnTanks() {
+    const ps = this.SPAWN.player;
+    const as = this.SPAWN.ai;
+
+    this.player.body.setVelocity(0, 0);
+    this.ai.body.setVelocity(0, 0);
+
+    this.player.setPosition(ps.x, ps.y);
+    this.ai.setPosition(as.x, as.y);
+
+    this.player.setRotation(ps.rot);
+    this.ai.setRotation(as.rot);
+
+    this.player.body.reset(ps.x, ps.y);
+    this.ai.body.reset(as.x, as.y);
+
+    const now = this.time.now;
+    this.player.setData("invulnUntil", now + 450);
+    this.ai.setData("invulnUntil", now + 450);
+
+    this.player.setAlpha(1).setVisible(true).setDepth(10);
+    this.ai.setAlpha(1).setVisible(true).setDepth(10);
+  }
+
+  // -----------------------------
+  // Arena / Art
+  // -----------------------------
+  _createArena() {
+    const g = this.add.graphics();
+    g.lineStyle(4, 0x2c2c2c, 1);
+    g.strokeRect(this.ARENA.x, this.ARENA.y, this.ARENA.w, this.ARENA.h);
+    g.setDepth(0);
+
+    this.walls = this.physics.add.staticGroup();
+    const thickness = 20;
+
+    // Top
+    this.walls.create(this.ARENA.x + this.ARENA.w / 2, this.ARENA.y - thickness / 2, null)
+      .setDisplaySize(this.ARENA.w + thickness * 2, thickness)
+      .refreshBody();
+
+    // Bottom
+    this.walls.create(this.ARENA.x + this.ARENA.w / 2, this.ARENA.y + this.ARENA.h + thickness / 2, null)
+      .setDisplaySize(this.ARENA.w + thickness * 2, thickness)
+      .refreshBody();
+
+    // Left
+    this.walls.create(this.ARENA.x - thickness / 2, this.ARENA.y + this.ARENA.h / 2, null)
+      .setDisplaySize(thickness, this.ARENA.h + thickness * 2)
+      .refreshBody();
+
+    // Right
+    this.walls.create(this.ARENA.x + this.ARENA.w + thickness / 2, this.ARENA.y + this.ARENA.h / 2, null)
+      .setDisplaySize(thickness, this.ARENA.h + thickness * 2)
+      .refreshBody();
+
+    this.walls.children.iterate(w => w.setVisible(false));
+  }
+
+  _rectsOverlap(a, b, pad = 0) {
+    return !(
+      a.x + a.w / 2 + pad < b.x - b.w / 2 ||
+      a.x - a.w / 2 - pad > b.x + b.w / 2 ||
+      a.y + a.h / 2 + pad < b.y - b.h / 2 ||
+      a.y - a.h / 2 - pad > b.y + b.h / 2
+    );
+  }
+
+  _getObstacleAABBs(pad = 6) {
+    const out = [];
+    if (!this.obstacles) return out;
+
+    const kids = this.obstacles.getChildren ? this.obstacles.getChildren() : [];
+    for (const o of kids) {
+      if (!o || !o.body) continue;
+      const b = o.body;
+      out.push({
+        xmin: b.x - pad,
+        ymin: b.y - pad,
+        xmax: b.x + b.width + pad,
+        ymax: b.y + b.height + pad
+      });
+    }
+    return out;
+  }
+
+  _segIntersectsAABB(x0, y0, x1, y1, aabb) {
+    let t0 = 0;
+    let t1 = 1;
+    const dx = x1 - x0;
+    const dy = y1 - y0;
+
+    const clip = (p, q) => {
+      if (p === 0) return q >= 0;
+      const r = q / p;
+      if (p < 0) {
+        if (r > t1) return false;
+        if (r > t0) t0 = r;
+      } else {
+        if (r < t0) return false;
+        if (r < t1) t1 = r;
+      }
+      return true;
+    };
+
+    if (
+      clip(-dx, x0 - aabb.xmin) &&
+      clip(dx, aabb.xmax - x0) &&
+      clip(-dy, y0 - aabb.ymin) &&
+      clip(dy, aabb.ymax - y0)
+    ) {
+      return t1 >= t0;
+    }
+    return false;
+  }
+
+  _hasLineOfSight(x0, y0, x1, y1, pad = 6) {
+    const aabbs = this._getObstacleAABBs(pad);
+    for (const a of aabbs) {
+      if (this._segIntersectsAABB(x0, y0, x1, y1, a)) return false;
+    }
+    return true;
+  }
+
+  _chooseBankPlan(ai, player) {
+    const leftX = this.ARENA.x;
+    const rightX = this.ARENA.x + this.ARENA.w;
+    const topY = this.ARENA.y;
+    const botY = this.ARENA.y + this.ARENA.h;
+
+    const margin = 18;
+    const px = player.x;
+    const py = player.y;
+    const ax = ai.x;
+    const ay = ai.y;
+
+    const walls = [
+      { id: "left", kind: "v", v: leftX },
+      { id: "right", kind: "v", v: rightX },
+      { id: "top", kind: "h", v: topY },
+      { id: "bottom", kind: "h", v: botY }
+    ];
+
+    let best = null;
+
+    for (const w of walls) {
+      let rx = px;
+      let ry = py;
+      if (w.kind === "v") rx = 2 * w.v - px;
+      else ry = 2 * w.v - py;
+
+      const dx = rx - ax;
+      const dy = ry - ay;
+
+      let t;
+      let bx;
+      let by;
+
+      if (w.kind === "v") {
+        if (dx === 0) continue;
+        t = (w.v - ax) / dx;
+        if (t <= 0 || t >= 1) continue;
+        by = ay + t * dy;
+        if (by < topY + margin || by > botY - margin) continue;
+        bx = w.v;
+      } else {
+        if (dy === 0) continue;
+        t = (w.v - ay) / dy;
+        if (t <= 0 || t >= 1) continue;
+        bx = ax + t * dx;
+        if (bx < leftX + margin || bx > rightX - margin) continue;
+        by = w.v;
+      }
+
+      const leg1OK = this._hasLineOfSight(ax, ay, bx, by, 8);
+      const leg2OK = this._hasLineOfSight(bx, by, px, py, 8);
+      if (!leg1OK || !leg2OK) continue;
+
+      const aimAngle = Math.atan2(ry - ay, rx - ax);
+      const d1 = Phaser.Math.Distance.Between(ax, ay, bx, by);
+      const d2 = Phaser.Math.Distance.Between(bx, by, px, py);
+      const facingPenalty = Math.abs(Phaser.Math.Angle.Wrap(aimAngle - ai.rotation)) * 140;
+      const score = d1 + d2 + facingPenalty;
+
+      if (!best || score < best.score) {
+        best = {
+          score,
+          wall: w.id,
+          bounce: { x: bx, y: by },
+          aim: { x: rx, y: ry },
+          aimAngle
+        };
+      }
+    }
+
+    return best;
+  }
+
+  _formatTime(secs) {
+    const s = Math.max(0, Math.floor(secs));
+    const mm = Math.floor(s / 60);
+    const ss = s % 60;
+    return `${mm}:${String(ss).padStart(2, "0")}`;
+  }
+
+  _buildSummaryText() {
+    const pShots = this.registry.get("pShots") || 0;
+    const pHits = this.registry.get("pHits") || 0;
+    const aShots = this.registry.get("aiShots") || 0;
+    const aHits = this.registry.get("aiHits") || 0;
+
+    const pAcc = pShots > 0 ? Math.round((pHits / pShots) * 100) : 0;
+    const aAcc = aShots > 0 ? Math.round((aHits / aShots) * 100) : 0;
+
+    const played = this.registry.get("matchTimePlayed") || 0;
+    const pW = this.registry.get("playerWins") || 0;
+    const aW = this.registry.get("aiWins") || 0;
+
+    return (
+      `MATCH SUMMARY\n` +
+      `Rounds: You ${pW} – AI ${aW}\n\n` +
+      `You:  Shots ${pShots}  • Hits ${pHits}  • Acc ${pAcc}%\n` +
+      `AI:   Shots ${aShots}  • Hits ${aHits}  • Acc ${aAcc}%\n\n` +
+      `Time played: ${this._formatTime(played)}\n`
+    );
+  }
+
+  _showSummaryScreen() {
+    this.registry.set("gameState", "summary");
+    this.registry.set("roundActive", false);
+
+    const summary = this._buildSummaryText();
+    this.registry.set("summaryText", summary);
+    this.registry.set("message", summary);
+    this.registry.set("subMessage", "ENTER new match • ESC back");
+    this.physics.world.pause();
+  }
+
+  _makeRandomBlocks(seed) {
+    const rng = new Phaser.Math.RandomDataGenerator([String(seed || 1)]);
+
+    const paddingFromWalls = 26;
+    const spawnSafeRadius = 90;
+    const minGap = 14;
+    const maxBlocks = rng.between(5, 9);
+
+    const blocks = [];
+    const arenaLeft = this.ARENA.x + paddingFromWalls;
+    const arenaRight = this.ARENA.x + this.ARENA.w - paddingFromWalls;
+    const arenaTop = this.ARENA.y + paddingFromWalls;
+    const arenaBottom = this.ARENA.y + this.ARENA.h - paddingFromWalls;
+
+    const ps = this.SPAWN.player;
+    const as = this.SPAWN.ai;
+
+    const isNearSpawn = (x, y) => {
+      const dp = Phaser.Math.Distance.Between(x, y, ps.x, ps.y);
+      const da = Phaser.Math.Distance.Between(x, y, as.x, as.y);
+      return dp < spawnSafeRadius || da < spawnSafeRadius;
+    };
+
+    const corridorY = (ps.y + as.y) / 2;
+    const corridorBand = 50;
+
+    const attempts = 220;
+    for (let i = 0; i < attempts && blocks.length < maxBlocks; i++) {
+      const isPillar = rng.frac() < 0.45;
+
+      let w;
+      let h;
+      if (isPillar) {
+        w = rng.between(32, 56);
+        h = rng.between(32, 56);
+      } else {
+        const horizontal = rng.frac() < 0.55;
+        if (horizontal) {
+          w = rng.between(90, 180);
+          h = rng.between(14, 22);
+        } else {
+          w = rng.between(14, 22);
+          h = rng.between(90, 170);
+        }
+      }
+
+      const x = rng.between(arenaLeft + w / 2, arenaRight - w / 2);
+      const y = rng.between(arenaTop + h / 2, arenaBottom - h / 2);
+
+      if (isNearSpawn(x, y)) continue;
+
+      const nearCorridor = Math.abs(y - corridorY) < corridorBand;
+      if (nearCorridor && (w * h) > 8000 && rng.frac() < 0.75) continue;
+
+      const candidate = { x, y, w, h };
+
+      let ok = true;
+      for (const b of blocks) {
+        if (this._rectsOverlap(candidate, b, minGap)) {
+          ok = false;
+          break;
+        }
+      }
+      if (!ok) continue;
+
+      blocks.push(candidate);
+    }
+
+    if (blocks.length < 3) {
+      return [
+        { x: this.ARENA.x + this.ARENA.w / 2, y: this.ARENA.y + this.ARENA.h / 2, w: 60, h: 60 },
+        { x: this.ARENA.x + this.ARENA.w * 0.5, y: this.ARENA.y + this.ARENA.h * 0.33, w: 140, h: 18 },
+        { x: this.ARENA.x + this.ARENA.w * 0.5, y: this.ARENA.y + this.ARENA.h * 0.67, w: 140, h: 18 }
+      ];
+    }
+
+    return blocks;
+  }
+
+  _createObstacles() {
+    if (this.obstacleColliders) {
+      this.obstacleColliders.forEach((collider) => {
+        if (collider && typeof collider.destroy === "function") {
+          collider.destroy();
+        }
+      });
+      this.obstacleColliders = [];
+    }
+    if (this.obstacleBulletCollider && typeof this.obstacleBulletCollider.destroy === "function") {
+      this.obstacleBulletCollider.destroy();
+      this.obstacleBulletCollider = null;
+    }
+    if (this.obstacles && typeof this.obstacles.destroy === "function") {
+      this.obstacles.destroy(true);
+    }
+    if (this.obstacleGraphics) {
+      this.obstacleGraphics.destroy();
+    }
+
+    this.obstacleGraphics = this.add.graphics();
+    this.obstacleGraphics.setDepth(1);
+
+    this.obstacles = this.physics.add.staticGroup();
+
+    const mode = this.registry.get("obstacleMode") || "fixed";
+    let blocksPx = [];
+    if (mode === "fixed") {
+      const layoutIndex = Phaser.Math.Between(0, this.LAYOUTS.length - 1);
+      this.registry.set("layoutIndex", layoutIndex);
+      const blocks = this.LAYOUTS[layoutIndex];
+      blocksPx = blocks.map((b) => ({
+        x: this.ARENA.x + b.x * this.ARENA.w,
+        y: this.ARENA.y + b.y * this.ARENA.h,
+        w: b.w,
+        h: b.h
+      }));
+    } else {
+      const seed = this.registry.get("obstacleSeed") || Phaser.Math.Between(1, 999999);
+      const nextSeed = (seed + 1) % 1000000;
+      this.registry.set("obstacleSeed", nextSeed);
+      blocksPx = this._makeRandomBlocks(seed);
+      this.registry.set("layoutIndex", -1);
+    }
+
+    blocksPx.forEach((b) => {
+      const x = b.x;
+      const y = b.y;
+
+      this.obstacleGraphics.fillStyle(0x202020, 1);
+      this.obstacleGraphics.fillRect(x - b.w / 2, y - b.h / 2, b.w, b.h);
+
+      this.obstacleGraphics.lineStyle(2, 0x3a3a3a, 1);
+      this.obstacleGraphics.strokeRect(x - b.w / 2, y - b.h / 2, b.w, b.h);
+
+      const o = this.obstacles.create(x, y, null);
+      o.setDisplaySize(b.w, b.h);
+      o.refreshBody();
+      o.setVisible(false);
+    });
+
+    // Ensure colliders exist even if called multiple times
+    this.obstacleColliders = [
+      this.physics.add.collider(this.player, this.obstacles),
+      this.physics.add.collider(this.ai, this.obstacles)
+    ];
+
+    this.obstacleBulletCollider = this.physics.add.collider(this.bullets, this.obstacles, (bullet) => {
+      const body = bullet && bullet.body;
+      if (!body) return;
+
+      const sp = Math.sqrt(body.velocity.x * body.velocity.x + body.velocity.y * body.velocity.y);
+      const max = (bullet.getData("speed") || this.BULLET.speed) * 1.05;
+      if (sp > max) {
+        const s = max / sp;
+        body.velocity.x *= s;
+        body.velocity.y *= s;
+      }
+      this._sfxRicochet();
+    });
+  }
+
+  _createTankTextures() {
+    if (!this.textures.exists("tank_player")) {
+      const tg = this.make.graphics({ x: 0, y: 0, add: false });
+      tg.fillStyle(0x4ee1ff, 1);
+      tg.fillRoundedRect(0, 0, 40, 26, 6);
+      tg.fillStyle(0x2a2a2a, 1);
+      tg.fillCircle(20, 13, 7);
+      tg.fillRect(20, 11, 18, 4);
+      tg.generateTexture("tank_player", 40, 26);
+      tg.destroy();
+    }
+
+    if (!this.textures.exists("tank_ai")) {
+      const tg = this.make.graphics({ x: 0, y: 0, add: false });
+      tg.fillStyle(0xff6b6b, 1);
+      tg.fillRoundedRect(0, 0, 40, 26, 6);
+      tg.fillStyle(0x2a2a2a, 1);
+      tg.fillCircle(20, 13, 7);
+      tg.fillRect(20, 11, 18, 4);
+      tg.generateTexture("tank_ai", 40, 26);
+      tg.destroy();
+    }
+
+    if (!this.textures.exists("bullet")) {
+      const bg = this.make.graphics({ x: 0, y: 0, add: false });
+      bg.fillStyle(0xf5f5f5, 1);
+      bg.fillCircle(4, 4, 4);
+      bg.generateTexture("bullet", 8, 8);
+      bg.destroy();
+    }
+
+    if (!this.textures.exists("spark")) {
+      const sg = this.make.graphics({ x: 0, y: 0, add: false });
+      sg.fillStyle(0xffffff, 1);
+      sg.fillRect(2, 0, 2, 6);
+      sg.fillRect(0, 2, 6, 2);
+      sg.generateTexture("spark", 6, 6);
+      sg.destroy();
+    }
+
+    if (!this.textures.exists("pickup_heavy")) {
+      const g = this.make.graphics({ x: 0, y: 0, add: false });
+      g.fillStyle(0xffd166, 1);
+      g.fillCircle(10, 10, 10);
+      g.fillStyle(0x1b1b1b, 1);
+      g.fillRect(6, 9, 8, 2);
+      g.generateTexture("pickup_heavy", 20, 20);
+      g.destroy();
+    }
+
+    if (!this.textures.exists("pickup_scatter")) {
+      const g = this.make.graphics({ x: 0, y: 0, add: false });
+      g.fillStyle(0x8ecae6, 1);
+      g.fillCircle(10, 10, 10);
+      g.fillStyle(0x1b1b1b, 1);
+      g.fillCircle(7, 10, 2);
+      g.fillCircle(10, 10, 2);
+      g.fillCircle(13, 10, 2);
+      g.generateTexture("pickup_scatter", 20, 20);
+      g.destroy();
+    }
+
+    if (!this.textures.exists("pickup_long")) {
+      const g = this.make.graphics({ x: 0, y: 0, add: false });
+      g.fillStyle(0xff6b6b, 1);
+      g.fillCircle(10, 10, 10);
+      g.fillStyle(0x1b1b1b, 1);
+      g.fillRect(5, 9, 10, 2);
+      g.fillRect(13, 7, 2, 6);
+      g.generateTexture("pickup_long", 20, 20);
+      g.destroy();
+    }
+
+    if (!this.textures.exists("trailDot")) {
+      const g = this.make.graphics({ x: 0, y: 0, add: false });
+      g.fillStyle(0xffffff, 1);
+      g.fillCircle(3, 3, 3);
+      g.generateTexture("trailDot", 6, 6);
+      g.destroy();
+    }
+  }
+
+  _spawnTank(x, y, texKey) {
+    const spr = this.physics.add.image(x, y, texKey);
+    spr.setDepth(10);
+    spr.setVisible(true);
+    spr.setAlpha(1);
+    spr.setMaxVelocity(
+      this.TANK.maxSpeed * this.BOOST.multiplier,
+      this.TANK.maxSpeed * this.BOOST.multiplier
+    );
+    spr.body.setCircle(13, (spr.width / 2) - 13, (spr.height / 2) - 13);
+    spr.setData("invulnUntil", 0);
+    return spr;
+  }
+
+  // -----------------------------
+  // Player
+  // -----------------------------
+  _updatePlayer(dt, time) {
+    let turn = 0;
+    if (this.keys.a.isDown) turn -= 1;
+    if (this.keys.d.isDown) turn += 1;
+    this.player.rotation += turn * this.TANK.turnSpeed * dt;
+
+    const now = time;
+    const isBoosting = now < (this.boostActiveUntil || 0);
+
+    if (Phaser.Input.Keyboard.JustDown(this.keys.shift)) {
+      const readyAt = this.boostReadyAt || 0;
+      if (now >= readyAt && !isBoosting) {
+        this.boostActiveUntil = now + this.BOOST.durationMs;
+        this.boostReadyAt = now + this.BOOST.cooldownMs;
+
+        this.registry.set("boostActiveUntil", this.boostActiveUntil);
+        this.registry.set("boostReadyAt", this.boostReadyAt);
+      }
+    }
+
+    const boostingNow = now < (this.boostActiveUntil || 0);
+    const mult = boostingNow ? this.BOOST.multiplier : 1;
+
+    const speedForward = this.TANK.maxSpeed * mult;
+    const speedBack = this.TANK.maxSpeed * 0.7 * mult;
+
+    let desiredSpeed = 0;
+    if (this.keys.w.isDown) desiredSpeed = speedForward;
+    else if (this.keys.s.isDown) desiredSpeed = -speedBack;
+
+    if (desiredSpeed !== 0) {
+      this.physics.velocityFromRotation(
+        this.player.rotation,
+        desiredSpeed,
+        this.player.body.velocity
+      );
+    } else {
+      this.player.body.velocity.scale(this.TANK.friction);
+    }
+
+    if (this.keys.space.isDown) {
+      if (time - this.lastPlayerShotAt >= this.BULLET.cooldownMs) {
+        this.lastPlayerShotAt = time;
+        this._fireBullet(this.player, "player", time);
+      }
+    }
+  }
+
+  // -----------------------------
+  // AI
+  // -----------------------------
+  _updateAI(dt, time) {
+    const p = this.player;
+    const a = this.ai;
+
+    if (this.aiCoverUntil && time < this.aiCoverUntil && this.aiCoverTarget) {
+      this._aiMoveTowardPoint(this.aiCoverTarget, 0.9);
+      return;
+    }
+    if (this.aiCoverUntil && time >= this.aiCoverUntil) {
+      this.aiCoverUntil = 0;
+      this.aiCoverTarget = null;
+    }
+
+    const pickup = this.activePickup && this.activePickup.active ? this.activePickup : null;
+    const aiWeapon = this.registry.get("aiWeapon") || "normal";
+    if (pickup && aiWeapon === "normal") {
+      const pickupId = pickup.getData("spawnId");
+      if (!this.aiPickupPlan || this.aiPickupPlan.id !== pickupId) {
+        this.aiPickupPlan = { id: pickupId, chaseAt: time + 2000 };
+      }
+      if (time >= this.aiPickupPlan.chaseAt) {
+        this._aiMoveTowardPoint({ x: pickup.x, y: pickup.y }, 0.85);
+        return;
+      }
+    } else {
+      this.aiPickupPlan = null;
+    }
+
+    const dxP = p.x - a.x;
+    const dyP = p.y - a.y;
+    const dist = Math.sqrt(dxP * dxP + dyP * dyP);
+
+    const directAngle = Math.atan2(dyP, dxP);
+    const directLOS = this._hasLineOfSight(a.x, a.y, p.x, p.y, 8);
+    const facingToPlayer = Math.abs(Phaser.Math.Angle.Wrap(directAngle - a.rotation));
+    const directGood = directLOS && facingToPlayer < 0.45;
+
+    if (time >= this.aiAimExpireAt) {
+      this.aiAimMode = "direct";
+      this.aiBankPlan = null;
+    }
+
+    if (!directGood && time >= this.aiNextBankThinkAt) {
+      this.aiNextBankThinkAt = time + this.AI.bankThinkMs;
+
+      if (Math.random() < this.AI.bankChance) {
+        const plan = this._chooseBankPlan(a, p);
+        if (plan) {
+          this.aiAimMode = "bank";
+          this.aiBankPlan = plan;
+          this.aiAimExpireAt = time + this.AI.bankAimMs;
+        }
+      }
+    }
+
+    let desiredAngle = directAngle;
+    if (this.aiAimMode === "bank" && this.aiBankPlan) {
+      desiredAngle = this.aiBankPlan.aimAngle;
+    }
+
+    let diff = Phaser.Math.Angle.Wrap(desiredAngle - a.rotation);
+    const wobble = (this.aiAimMode === "bank") ? (this.AI.wobble * 0.25) : this.AI.wobble;
+    diff += (Math.random() - 0.5) * wobble * dt;
+
+    const maxTurn = this.TANK.turnSpeed * 0.9 * dt;
+    diff = Phaser.Math.Clamp(diff, -maxTurn, maxTurn);
+    a.rotation += diff;
+
+    let desiredSpeed = 0;
+
+    if (dist < this.AI.retreatDist) {
+      desiredSpeed = -this.TANK.maxSpeed * 0.35;
+      a.rotation += (Math.random() > 0.5 ? 1 : -1) * this.TANK.turnSpeed * 0.5 * dt;
+    } else {
+      if (Math.random() < this.AI.moveBias) {
+        desiredSpeed = this.TANK.maxSpeed * 0.55;
+      }
+    }
+
+    if (desiredSpeed !== 0) {
+      this.physics.velocityFromRotation(a.rotation, desiredSpeed, a.body.velocity);
+    } else {
+      a.body.velocity.scale(this.TANK.friction);
+    }
+
+    const facing = Math.abs(Phaser.Math.Angle.Wrap(desiredAngle - a.rotation));
+    const canFire = (time - this.lastAiShotAt) >= this.AI.fireCooldownMs;
+
+    if (this.aiAimMode === "direct") {
+      if (directLOS && facing < 0.35 && canFire) {
+        this.lastAiShotAt = time;
+        this._fireBullet(a, "ai", time);
+      }
+    } else {
+      if (facing < this.AI.bankFacingFire && canFire) {
+        this.lastAiShotAt = time;
+        this._fireBullet(a, "ai", time);
+      }
+    }
+  }
+
+  // -----------------------------
+  // Bullets / Combat
+  // -----------------------------
+  _resolveBullet(obj1, obj2) {
+    const isBullet = (obj) => obj && obj.texture && obj.texture.key === "bullet" && obj.body;
+    if (isBullet(obj1)) return obj1;
+    if (isBullet(obj2)) return obj2;
+    return null;
+  }
+
+  _getClearBulletSpawn(shooter, dir) {
+    const start = 28;
+    const min = 10;
+    const step = 2;
+
+    for (let off = start; off >= min; off -= step) {
+      const x = shooter.x + dir.x * off;
+      const y = shooter.y + dir.y * off;
+      if (!this._isPointBlocked(shooter, x, y)) return { x, y };
+    }
+    return null;
+  }
+
+  _isPointBlocked(shooter, x, y) {
+    const bodies = this.physics.overlapRect(x - 4, y - 4, 8, 8, true, true);
+    for (const b of bodies) {
+      const go = b.gameObject;
+      if (!go) continue;
+      if (go === shooter) continue;
+      if (this.walls && typeof this.walls.contains === "function" && this.walls.contains(go)) return true;
+      if (this.obstacles && typeof this.obstacles.contains === "function" && this.obstacles.contains(go)) return true;
+    }
+    return false;
+  }
+
+  _fireBullet(shooter, owner, time) {
+    const dirBase = new Phaser.Math.Vector2(1, 0).rotate(shooter.rotation);
+    const spawn = this._getClearBulletSpawn(shooter, dirBase);
+    if (!spawn) return;
+
+    const weaponKey = (owner === "player")
+      ? (this.registry.get("playerWeapon") || "normal")
+      : (this.registry.get("aiWeapon") || "normal");
+    const wpn = this.WEAPONS[weaponKey] || this.WEAPONS.normal;
+
+    if (owner === "player") {
+      this.registry.set("pShots", (this.registry.get("pShots") || 0) + 1);
+    } else if (owner === "ai") {
+      this.registry.set("aiShots", (this.registry.get("aiShots") || 0) + 1);
+    }
+
+    const count = wpn.count || 1;
+    const spread = wpn.spread || 0;
+
+    for (let i = 0; i < count; i++) {
+      const t = (count === 1) ? 0 : (i - (count - 1) / 2);
+      const ang = shooter.rotation + t * spread;
+      const dir = new Phaser.Math.Vector2(1, 0).rotate(ang);
+
+      const bullet = this.bullets.create(spawn.x, spawn.y, "bullet");
+      if (!bullet) continue;
+
+      bullet.setDepth(5);
+      bullet.setData("owner", owner);
+      bullet.setData("bornAt", time);
+      bullet.setData("lifeMs", wpn.lifeMs);
+      bullet.setData("damage", wpn.dmg);
+      bullet.setData("speed", wpn.speed);
+
+      bullet.body.setAllowGravity(false);
+      let r = 4;
+      let s = 1.0;
+      if (weaponKey === "heavy") {
+        r = 6;
+        s = 1.6;
+      } else if (weaponKey === "long") {
+        r = 5;
+        s = 1.25;
+      }
+      bullet.setScale(s);
+      bullet.body.setCircle(r);
+      bullet.setBounce(1, 1);
+
+      bullet.body.setVelocity(dir.x * wpn.speed, dir.y * wpn.speed);
+    }
+  }
+
+  _cleanupBullets(time) {
+    this.bullets.children.iterate((b) => {
+      if (!b) return;
+      const bornAt = b.getData("bornAt");
+      if (bornAt == null) return;
+      const age = time - bornAt;
+      const life = b.getData("lifeMs") || this.BULLET.lifeMs;
+      if (age > life) b.destroy();
+    });
+  }
+
+  _updateBulletTrails(time) {
+    if (!this.bullets) return;
+    this.bullets.children.iterate((b) => {
+      if (!b || !b.active) return;
+      const last = b.getData("lastTrailAt") || 0;
+      if (time - last < 55) return;
+      b.setData("lastTrailAt", time);
+
+      const dmg = b.getData("damage") || 1;
+      const s = Phaser.Math.Clamp(0.35 + dmg * 0.12, 0.35, 0.75);
+
+      const pip = this.add.image(b.x, b.y, "trailDot");
+      pip.setDepth(3);
+      pip.setAlpha(0.22);
+      pip.setScale(s);
+      this.trailGroup.add(pip);
+
+      this.tweens.add({
+        targets: pip,
+        alpha: 0,
+        scale: s * 0.6,
+        duration: 240,
+        ease: "Quad.easeOut",
+        onComplete: () => pip.destroy()
+      });
+    });
+  }
+
+  _onTankHit(which, bullet) {
+    if (!bullet || !bullet.texture || bullet.texture.key !== "bullet") return;
+
+    const tank = (which === "player") ? this.player : this.ai;
+
+    const now = this.time.now;
+    const invulnUntil = tank.getData("invulnUntil") || 0;
+    if (now < invulnUntil) {
+      bullet.destroy();
+      return;
+    }
+    tank.setData("invulnUntil", now + 120);
+
+    const owner = bullet.getData("owner");
+    const dmg = bullet.getData("damage") || 1;
+    if (owner === "player") {
+      this.registry.set("pHits", (this.registry.get("pHits") || 0) + 1);
+    } else if (owner === "ai") {
+      this.registry.set("aiHits", (this.registry.get("aiHits") || 0) + 1);
+    }
+
+    bullet.destroy();
+
+    this._hitFX(tank.x, tank.y);
+    this._sfxHit();
+
+    if (which === "player") {
+      const hp = this.registry.get("playerHP") - dmg;
+      this.registry.set("playerHP", hp);
+      this._flashTank(tank);
+      if (hp <= 0) this._endRound(false, "DESTROYED — Round Lost", true);
+    } else {
+      const hp = this.registry.get("aiHP") - dmg;
+      this.registry.set("aiHP", hp);
+      this._flashTank(tank);
+
+      this.registry.set("score", this.registry.get("score") + 100);
+
+      this._noteAIHitForCover(this.time.now);
+
+      if (hp <= 0) this._endRound(true, "AI DESTROYED — Round Won", true);
+    }
+  }
+
+  _flashTank(tank) {
+    tank.setAlpha(0.35);
+    this.time.delayedCall(80, () => tank.setAlpha(1));
+  }
+
+  _hitFX(x, y) {
+    this.cameras.main.shake(90, 0.007);
+    if (this.sparks) {
+      this.sparks.setPosition(x, y);
+      this.sparks.explode(12, x, y);
+    }
+  }
+
+  // -----------------------------
+  // WebAudio SFX (no external files)
+  // -----------------------------
+  _ensureAudio() {
+    if (!this.sfxEnabled) return false;
+
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return false;
+
+    if (!this.audioCtx) this.audioCtx = new Ctx();
+
+    if (this.audioCtx.state === "suspended") {
+      this.audioCtx.resume().catch(() => {});
+    }
+    return true;
+  }
+
+  _beep({ freq = 440, durMs = 80, type = "square", vol = 0.06, slideTo = null }) {
+    if (!this._ensureAudio()) return;
+
+    const ctx = this.audioCtx;
+    const t0 = ctx.currentTime;
+
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, t0);
+
+    if (slideTo != null) {
+      osc.frequency.exponentialRampToValueAtTime(Math.max(1, slideTo), t0 + durMs / 1000);
+    }
+
+    gain.gain.setValueAtTime(0.0001, t0);
+    gain.gain.exponentialRampToValueAtTime(Math.max(0.0001, vol), t0 + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + durMs / 1000);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+
+    osc.start(t0);
+    osc.stop(t0 + durMs / 1000 + 0.02);
+  }
+
+  _sfxCountdownTick(n) {
+    const map = { 3: 520, 2: 620, 1: 760 };
+    this._beep({ freq: map[n] || 600, durMs: 70, type: "square", vol: 0.05 });
+  }
+
+  _sfxGo() {
+    this._beep({ freq: 880, slideTo: 1240, durMs: 90, type: "triangle", vol: 0.06 });
+    this.time.delayedCall(90, () => this._beep({ freq: 1240, durMs: 60, type: "triangle", vol: 0.05 }));
+  }
+
+  _sfxHit() {
+    this._beep({ freq: 220, slideTo: 90, durMs: 110, type: "sawtooth", vol: 0.07 });
+    this.time.delayedCall(30, () => this._beep({ freq: 1200, slideTo: 600, durMs: 55, type: "square", vol: 0.03 }));
+  }
+
+  _sfxRicochet() {
+    const now = this.time.now;
+    if (now - this.lastRicochetAt < 55) return;
+    this.lastRicochetAt = now;
+
+    this._beep({ freq: 980, slideTo: 720, durMs: 55, type: "triangle", vol: 0.03 });
+  }
+
+  _setGlobalTimeScale(scale) {
+    const s = Phaser.Math.Clamp(scale, 0.05, 1);
+    this.time.timeScale = s;
+    if (this.physics && this.physics.world) {
+      this.physics.world.timeScale = s;
+    }
+    if (this.tweens) {
+      this.tweens.timeScale = s;
+    }
+    if (this.anims) {
+      this.anims.globalTimeScale = s;
+    }
+  }
+
+  _slowMo(ms = 150, scale = 0.18, onDone = null) {
+    if (this._slowMoActive) return;
+    this._slowMoActive = true;
+    this._setGlobalTimeScale(scale);
+    window.setTimeout(() => {
+      this._setGlobalTimeScale(1);
+      this._slowMoActive = false;
+      if (typeof onDone === "function") onDone();
+    }, ms);
+  }
+
+  _endRound(playerWon, message, isKill = false) {
+    if (!this.registry.get("roundActive")) return;
+
+    const secs = this.registry.get("roundSeconds") || this.ROUND_SECONDS;
+    const timeLeft = this.registry.get("timeLeft") || 0;
+    const playedThisRound = Phaser.Math.Clamp(secs - timeLeft, 0, secs);
+    this.registry.set(
+      "matchTimePlayed",
+      (this.registry.get("matchTimePlayed") || 0) + playedThisRound
+    );
+
+    this.registry.set("roundActive", false);
+
+    // Update match wins
+    const winsToWin = this.registry.get("winsToWin") || 3;
+
+    if (playerWon) {
+      this.registry.set("playerWins", (this.registry.get("playerWins") || 0) + 1);
+      const t = this.registry.get("timeLeft");
+      this.registry.set("score", this.registry.get("score") + t * 10);
+    } else {
+      this.registry.set("aiWins", (this.registry.get("aiWins") || 0) + 1);
+    }
+
+    const pW = this.registry.get("playerWins") || 0;
+    const aW = this.registry.get("aiWins") || 0;
+    const matchEnded = (pW >= winsToWin || aW >= winsToWin);
+
+    const finalize = () => {
+      // Stop physics immediately so nothing “keeps happening” between rounds
+      this.player.body.setVelocity(0, 0);
+      this.ai.body.setVelocity(0, 0);
+      this.physics.world.pause();
+
+      // Match end?
+      if (matchEnded) {
+        this.registry.set("gameState", "menu");
+        this.registry.set("postMatch", true);
+
+        const won = pW >= winsToWin;
+        this.registry.set("lastMatchResult", won ? "won" : "lost");
+        this.registry.set("message", won ? "MATCH WON" : "MATCH LOST");
+
+        const summaryLink = won ? " • M summary" : "";
+        this.registry.set(
+          "subMessage",
+          `Final: You ${pW} – AI ${aW} • ←/→ set time • ENTER new match${summaryLink} • R restart`
+        );
+        this.registry.set("summaryText", this._buildSummaryText());
+        return;
+      }
+
+      // Otherwise: between rounds
+      this.registry.set("gameState", "betweenRounds");
+      this.registry.set("message", message);
+      this.registry.set(
+        "subMessage",
+        `Match: You ${pW} – AI ${aW} (first to ${winsToWin}) • ENTER next round • R restart`
+      );
+    };
+
+    if (matchEnded && isKill) {
+      this._slowMo(150, 0.18, finalize);
+    } else {
+      finalize();
+    }
+  }
+}

@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Phaser Tank Ricochet Arena (MVP)</title>
+  <style>
+    html, body { margin:0; padding:0; height:100%; background:#050505; }
+    #game { width:100vw; height:100vh; }
+    canvas { display:block; margin:0 auto; }
+  </style>
+</head>
+<body>
+  <div id="game"></div>
+  <!-- Phaser (Phaser Launcher can inject this or you can point to local) -->
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3.90.0/dist/phaser.min.js"></script>
+
+  <!-- Load your files in order (no modules/imports) -->
+  <script src="src/scenes/BootScene.js"></script>
+  <script src="src/scenes/GameScene.js"></script>
+  <script src="src/scenes/UIScene.js"></script>
+  <script src="src/main.js"></script>
+</body>
+</html>
